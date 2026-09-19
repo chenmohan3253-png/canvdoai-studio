@@ -1,13 +1,13 @@
 {
   "name": "canvdoai-desktop",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "private": false,
   "description": "CanvDoAI 本地创作工作室：画布与一键成片",
   "author": "CanvDoAI",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chenmomo3253-boop/canvdoai-studio.git"
+    "url": "https://github.com/chenmohan3253-png/canvdoai-studio.git"
   },
   "type": "module",
   "main": "build/main.cjs",

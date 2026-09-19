@@ -18,6 +18,7 @@ import { AudioReviewPage } from '../desktop/AudioReviewPage';
 import {CanvasPage} from '../desktop/CanvasPage';
 import {AssetLibrary} from '../desktop/AssetLibrary';
 import {ContactPage} from '../desktop/ContactPage';
+import {PricingPage} from '../desktop/PricingPage';
 
 export function App() {
   const location = useLocation();
@@ -37,6 +38,7 @@ export function App() {
     { to: "/assets", label: "素材中心" },
     { to: "/settings", label: "API 接口设置" },
     { to: "/audio-review", label: "音轨审查" },
+    { to: "/pricing", label: "API 报价" },
     { to: "/contact", label: "购买 API / 联系我们" },
   ];
 
@@ -82,6 +84,7 @@ export function App() {
             <Route path="/remake" element={<Remake />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/audio-review" element={<AudioReviewPage />} />
+            <Route path="/pricing" element={<PricingPage />} />
             <Route path="/contact" element={<ContactPage />} />
             <Route path="/" element={<Navigate to="/projects" replace />} />
             <Route path="/projects" element={<ProjectList projects={projects} onCreateProject={handleCreateProject} onOpenProject={(id) => navigate(`/video-studio/${encodeURIComponent(id)}`)} onDeleteProject={deleteProject} />} />

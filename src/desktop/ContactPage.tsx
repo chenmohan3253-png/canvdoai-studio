@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import contactQr from "../assets/canvdoai-wechat-contact.png";
 
 export function ContactPage() {
@@ -20,7 +21,7 @@ export function ContactPage() {
         <article className="contact-card">
           <span className="contact-badge">官方微信</span><h2>扫码添加 CanvDoAI</h2><p>添加时建议备注“API购买”或“工作室部署”，方便快速对接。</p>
           <button className="contact-qr-button" type="button" onClick={() => setExpanded(true)} aria-label="放大官方微信二维码"><img src={contactQr} alt="CanvDoAI 官方微信二维码" /></button>
-          <div className="contact-actions"><button className="primary" type="button" onClick={() => setExpanded(true)}>放大二维码</button><a className="contact-download" href={contactQr} download="CanvDoAI-官方微信二维码.png">保存二维码</a></div>
+          <div className="contact-actions"><button className="primary" type="button" onClick={() => setExpanded(true)}>放大二维码</button><a className="contact-download" href={contactQr} download="CanvDoAI-官方微信二维码.png">保存二维码</a><Link className="contact-download" to="/pricing">查看 API 报价</Link></div>
         </article>
         <article className="contact-services">
           <span className="contact-badge">可咨询服务</span><h2>从接口测试到正式生产</h2>

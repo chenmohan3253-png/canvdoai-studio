@@ -1,0 +1,29 @@
+.shell-sidebar a[href="/pricing"] {
+  margin-top: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--accent-2) 12%, transparent));
+  color: #eef1ff;
+  opacity: 1;
+}
+
+.pricing-page { max-width: 1200px; margin: 0 auto; }
+.pricing-contact-link { display: inline-flex; align-items: center; justify-content: center; padding: 11px 16px; border-radius: 10px; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); text-decoration: none; font-weight: 800; }
+.pricing-callout { display: flex; align-items: center; justify-content: space-between; gap: 22px; margin: 22px 0; padding: 18px 20px; border: 1px solid #394763; border-radius: 14px; background: linear-gradient(135deg, #151c2b, #1a2032); }
+.pricing-callout strong { font-size: 17px; }
+.pricing-callout p { margin: 5px 0 0; color: #aeb8cc; line-height: 1.6; }
+.pricing-callout img { width: 96px; height: 96px; object-fit: cover; border-radius: 12px; background: #fff; }
+.pricing-table-wrap { overflow: auto; border: 1px solid #31394c; border-radius: 15px; }
+.pricing-table { width: 100%; min-width: 780px; border-collapse: collapse; background: #111621; }
+.pricing-table th { padding: 14px 12px; background: #1e293b; color: #f8fafc; text-align: center; font-size: 13px; border-bottom: 2px solid #38bdf8; }
+.pricing-table td { padding: 13px 12px; text-align: center; border-bottom: 1px solid #2a3242; color: #dbe3f2; }
+.pricing-table tbody tr:nth-child(odd) { background: #172033; }
+.pricing-table tbody tr:hover { background: #202b43; }
+.pricing-table td:nth-child(2) { text-align: left; font-weight: 700; }
+.pricing-table td strong { color: #eaf1ff; font-size: 15px; }
+.pricing-table td small { color: #91a0b8; }
+.pricing-footnote { padding: 14px 16px; border: 1px solid #5a4c2d; border-radius: 11px; background: #262014; color: #d7c7a8; font-size: 13px; line-height: 1.65; }
+
+@media (max-width: 700px) {
+  .pricing-callout { align-items: flex-start; }
+  .pricing-callout img { width: 72px; height: 72px; }
+}
