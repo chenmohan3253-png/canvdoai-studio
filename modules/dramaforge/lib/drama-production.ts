@@ -81,6 +81,11 @@ export interface DramaSourceAnalysis {
   scenes: string[];
   started_at: string | null;
   completed_at: string | null;
+  transient_cleanup?: {
+    status: "pending" | "succeeded" | "deferred";
+    attempted_at: string | null;
+    message: string | null;
+  };
   failure: { category: string; message: string } | null;
 }
 

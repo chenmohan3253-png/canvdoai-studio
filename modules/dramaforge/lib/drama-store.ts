@@ -30,6 +30,7 @@ export function emptyDramaAnalysis(): DramaSourceAnalysis {
     scenes: [],
     started_at: null,
     completed_at: null,
+    transient_cleanup: { status: "pending", attempted_at: null, message: null },
     failure: null,
   };
 }

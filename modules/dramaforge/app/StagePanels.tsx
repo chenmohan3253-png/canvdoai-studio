@@ -276,6 +276,7 @@ export function StagePanels({
   const unsubmittedApproved = batch.segments.filter((segment) => !segment.job_id && segment.storyboard_review_status === "approved").length;
   const canSubmitNextBatch = submittedCount === outputApprovedCount && failedSegments.length === 0;
   const analysisReady = batch.analysis.status === "succeeded" && batch.analysis.shots.length > 0 && batch.segments.length > 0;
+  const motionSampledCount = batch.analysis.shots.filter((shot) => shot.motion_sampled).length;
 
   if (activeStep === 1) {
     return (
@@ -291,7 +292,7 @@ export function StagePanels({
           <div className="analysis-cards">
             <div><span>真实镜头</span><strong>{batch.analysis.shots.length || "—"}</strong><small>FFmpeg 场景切换检测</small></div>
             <div><span>ASR字幕</span><strong>{batch.analysis.transcript.length || "—"}</strong><small>{batch.analysis.detected_language ? `检测语言 ${batch.analysis.detected_language}` : "真实音轨转写"}</small></div>
-            <div><span>OCR文字</span><strong>{batch.analysis.ocr_texts.length || "—"}</strong><small>关键帧可见文字去重</small></div>
+            <div><span>动态镜头</span><strong>{motionSampledCount || "—"}</strong><small>2～5秒低清序列 · 仅上传3张时序帧</small></div>
             <div><span>人物 / 场景</span><strong>{batch.analysis.characters.length} / {batch.analysis.scenes.length}</strong><small>仅描述可见外观，不猜身份</small></div>
           </div>
           <div className="story-summary">
@@ -304,6 +305,8 @@ export function StagePanels({
             {batch.analysis.transcript.length > 0 && <details className="prompt-details"><summary>查看真实ASR转写（{batch.analysis.transcript.length}条）</summary><pre>{batch.analysis.transcript.slice(0, 120).map((cue) => `[${formatDramaTimecode(cue.start_seconds)}–${formatDramaTimecode(cue.end_seconds)}] ${cue.text}`).join("\n")}</pre></details>}
             {productionError && <div className="runtime-warning"><b>分析提示</b><span>{productionError}</span></div>}
             {batch.analysis.failure && <div className="runtime-warning"><b>{batch.analysis.failure.category}</b><span>{batch.analysis.failure.message}</span></div>}
+            {analysisReady && batch.analysis.transient_cleanup?.status === "succeeded" && <div className="notice-box"><b>临时素材已清理</b><span>结构化结果已经保存到本机项目；分析关键帧、动态预览、音频分块和重复源片缓存已从分析服务删除。</span></div>}
+            {analysisReady && batch.analysis.transient_cleanup?.status === "deferred" && <div className="runtime-warning"><b>临时素材等待回收</b><span>{batch.analysis.transient_cleanup.message || "即时清理未确认，服务端保留期清理任务将继续回收。"}</span></div>}
           </div>
         </article>
         <aside className="panel character-panel">

@@ -165,6 +165,7 @@ export async function syncProductionAnalysis(request: Request, batchId: string) 
       scenes: unique(shots.map((shot) => shot.scene), 80),
       started_at: batch.analysis.started_at,
       completed_at: now,
+      transient_cleanup: { status: "pending", attempted_at: null, message: null },
       failure: null,
     };
     const planned = planDramaSegmentsFromShots({
@@ -206,10 +207,24 @@ export async function syncProductionAnalysis(request: Request, batchId: string) 
     batch.failure = null;
     batch.status = "analysis_review";
     batch.updated_at = now;
-    const saved = await saveDramaBatchRecord(identity, batch);
+    let saved = await saveDramaBatchRecord(identity, batch);
     // JSON is durable in the desktop database at this point. Keyframes, motion
     // previews, audio chunks and the duplicate source cache are now disposable.
-    await analysisFetch(`/v1/analysis/${encodeURIComponent(batch.analysis.job_id!)}`, { method: "DELETE" }).catch(() => undefined);
+    const cleanupAttemptedAt = new Date().toISOString();
+    try {
+      await analysisFetch(`/v1/analysis/${encodeURIComponent(batch.analysis.job_id!)}`, { method: "DELETE" });
+      saved.analysis.transient_cleanup = { status: "succeeded", attempted_at: cleanupAttemptedAt, message: null };
+    } catch (cleanupError) {
+      saved.analysis.transient_cleanup = {
+        status: "deferred",
+        attempted_at: cleanupAttemptedAt,
+        message: cleanupError instanceof Error
+          ? `${cleanupError.message}；临时素材将由服务端保留期清理任务回收。`
+          : "临时素材即时清理未确认；将由服务端保留期清理任务回收。",
+      };
+    }
+    saved.updated_at = new Date().toISOString();
+    saved = await saveDramaBatchRecord(identity, saved);
     return saved;
   } catch (error) {
     const message = error instanceof Error ? error.message : "ASR/OCR/人物和场景识别失败";
