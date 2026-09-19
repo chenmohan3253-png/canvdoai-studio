@@ -1,0 +1,69 @@
+// Generated from audited module routes; do not edit by hand.
+import * as r0 from '../modules/dramaforge/app/api/drama/v1/ai/health/route';
+import * as r1 from '../modules/dramaforge/app/api/drama/v1/assets/route';
+import * as r2 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/analysis/route';
+import * as r3 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/analysis/sync/route';
+import * as r4 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/assemble/route';
+import * as r5 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/auto-review/route';
+import * as r6 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/exports/[format]/route';
+import * as r7 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/generate/route';
+import * as r8 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/plan/route';
+import * as r9 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/reference-assets/[assetId]/review/route';
+import * as r10 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/reference-assets/route';
+import * as r11 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/reviews/route';
+import * as r12 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/route';
+import * as r13 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/segments/[segmentId]/retry/route';
+import * as r14 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/segments/[segmentId]/review/route';
+import * as r15 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/segments/[segmentId]/storyboard-retry/route';
+import * as r16 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/segments/[segmentId]/storyboard-review/route';
+import * as r17 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/storyboard-assets/route';
+import * as r18 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/storyboards/generate/route';
+import * as r19 from '../modules/dramaforge/app/api/drama/v1/batches/[batchId]/sync/route';
+import * as r20 from '../modules/dramaforge/app/api/drama/v1/batches/route';
+import * as r21 from '../modules/dramaforge/app/api/drama/v1/catalog/route';
+import * as r22 from '../modules/dramaforge/app/api/drama/v1/health/route';
+import * as r23 from '../modules/dramaforge/app/api/drama/v1/jobs/[jobId]/route';
+import * as r24 from '../modules/dramaforge/app/api/drama/v1/jobs/route';
+import * as r25 from '../modules/dramaforge/app/api/drama/v1/storyboard-images/route';
+import * as r26 from '../modules/dramaforge/app/api/drama/v1/upload-policy/route';
+import * as r27 from '../modules/dramaforge/app/api/drama/v1/uploads/[uploadId]/complete/route';
+import * as r28 from '../modules/dramaforge/app/api/drama/v1/uploads/[uploadId]/content/route';
+import * as r29 from '../modules/dramaforge/app/api/drama/v1/uploads/[uploadId]/parts/[partNumber]/route';
+import * as r30 from '../modules/dramaforge/app/api/drama/v1/uploads/[uploadId]/route';
+import * as r31 from '../modules/dramaforge/app/api/drama/v1/uploads/route';
+import * as r32 from '../modules/dramaforge/app/api/drama/v1/usage/route';
+export const dramaRoutes = [
+  { path: "/api/drama/v1/ai/health", handlers: r0 },
+  { path: "/api/drama/v1/assets", handlers: r1 },
+  { path: "/api/drama/v1/batches/[batchId]/analysis", handlers: r2 },
+  { path: "/api/drama/v1/batches/[batchId]/analysis/sync", handlers: r3 },
+  { path: "/api/drama/v1/batches/[batchId]/assemble", handlers: r4 },
+  { path: "/api/drama/v1/batches/[batchId]/auto-review", handlers: r5 },
+  { path: "/api/drama/v1/batches/[batchId]/exports/[format]", handlers: r6 },
+  { path: "/api/drama/v1/batches/[batchId]/generate", handlers: r7 },
+  { path: "/api/drama/v1/batches/[batchId]/plan", handlers: r8 },
+  { path: "/api/drama/v1/batches/[batchId]/reference-assets/[assetId]/review", handlers: r9 },
+  { path: "/api/drama/v1/batches/[batchId]/reference-assets", handlers: r10 },
+  { path: "/api/drama/v1/batches/[batchId]/reviews", handlers: r11 },
+  { path: "/api/drama/v1/batches/[batchId]", handlers: r12 },
+  { path: "/api/drama/v1/batches/[batchId]/segments/[segmentId]/retry", handlers: r13 },
+  { path: "/api/drama/v1/batches/[batchId]/segments/[segmentId]/review", handlers: r14 },
+  { path: "/api/drama/v1/batches/[batchId]/segments/[segmentId]/storyboard-retry", handlers: r15 },
+  { path: "/api/drama/v1/batches/[batchId]/segments/[segmentId]/storyboard-review", handlers: r16 },
+  { path: "/api/drama/v1/batches/[batchId]/storyboard-assets", handlers: r17 },
+  { path: "/api/drama/v1/batches/[batchId]/storyboards/generate", handlers: r18 },
+  { path: "/api/drama/v1/batches/[batchId]/sync", handlers: r19 },
+  { path: "/api/drama/v1/batches", handlers: r20 },
+  { path: "/api/drama/v1/catalog", handlers: r21 },
+  { path: "/api/drama/v1/health", handlers: r22 },
+  { path: "/api/drama/v1/jobs/[jobId]", handlers: r23 },
+  { path: "/api/drama/v1/jobs", handlers: r24 },
+  { path: "/api/drama/v1/storyboard-images", handlers: r25 },
+  { path: "/api/drama/v1/upload-policy", handlers: r26 },
+  { path: "/api/drama/v1/uploads/[uploadId]/complete", handlers: r27 },
+  { path: "/api/drama/v1/uploads/[uploadId]/content", handlers: r28 },
+  { path: "/api/drama/v1/uploads/[uploadId]/parts/[partNumber]", handlers: r29 },
+  { path: "/api/drama/v1/uploads/[uploadId]", handlers: r30 },
+  { path: "/api/drama/v1/uploads", handlers: r31 },
+  { path: "/api/drama/v1/usage", handlers: r32 }
+];

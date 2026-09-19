@@ -1,0 +1,90 @@
+// Read-only product audit: all writes target an isolated temporary profile.
+// No real credentials, no external generation requests, no production source changes.
+import assert from 'node:assert/strict';
+import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {resolve,join} from 'node:path';
+import {createRequire} from 'node:module';
+import {randomUUID} from 'node:crypto';
+import {createServer} from 'node:http';
+import {execFile,spawn} from 'node:child_process';
+import {promisify} from 'node:util';
+import {build} from 'esbuild';
+const require=createRequire(import.meta.url),runFile=promisify(execFile);
+if(process.argv[2]==='--crash-worker'){
+  const {StudioStore}=require(process.env.AUDIT_BUNDLE);
+  const s=new StudioStore(process.env.AUDIT_PROFILE);
+  s.put('canvas-task','interrupted',{id:'interrupted',canvasId:'crash-canvas',state:'RUNNING',completed:27,total:40});
+  s.put('provider-task','crash-video',{key:'crash-video',account:'dummy-account',state:'REMOTE',job:{id:'preserved-remote-id',status:'queued'},updatedAt:new Date().toISOString()});
+  s.put('asset','completed-asset',{id:'completed-asset',kind:'text',text:'已完成片段记录',origin:{module:'canvas',projectId:'audit'}});
+  process.stdout.write('AUDIT_READY\n');setInterval(()=>{},10000);
+}else{
+const dir=await mkdtemp(join(tmpdir(),'canvdoai-full-audit-'));
+process.env.CANVDOAI_DATA_DIR=dir;
+process.env.FFMPEG_PATH=resolve('vendor/ffmpeg/ffmpeg.exe');
+process.env.FFPROBE_PATH=resolve('vendor/ffmpeg/ffprobe.exe');
+const bundle=join(dir,'audit-runtime.cjs');
+await build({stdin:{contents:["export * from './runtime/studio-engine';","export * from './runtime/studio-store';","export * from './runtime/provider-tasks';","export * from './runtime/studio-package';","export * from './runtime/studio-bridge';","export * from './src/desktop/canvas-model';","export * from './electron/store';"].join('\n'),resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'cjs',outfile:bundle,logLevel:'silent'});
+const {StudioEngine,StudioStore,DurableStore,persistentVideoJob,newNode,validateGraph,exportCanvas,importCanvas,applyCanvasAsset}=require(bundle);
+const results=[];
+async function check(id,title,fn){try{const evidence=await fn();results.push({id,title,status:'PASS',evidence});}catch(e){results.push({id,title,status:'FAIL',evidence:e.message});}process.stdout.write(`${results.at(-1).status} ${id} ${title}\n`);}
+const document=(nodes,edges=[])=>({id:randomUUID(),name:'隔离检查画布',projectId:'audit-project',revision:0,updatedAt:'',nodes,edges});
+const edge=(a,b,slot='prompt')=>({id:randomUUID(),source:a.id,target:b.id,sourceHandle:'result',targetHandle:slot});
+let local,mock;
+try{
+await check('G01','画布合法连线与循环拦截',()=>{const a=newNode('textGenerate'),b=newNode('textGenerate');assert.equal(validateGraph(document([a,b],[edge(a,b)])),undefined);assert.match(validateGraph(document([a,b],[edge(a,b),edge(b,a)])),/循环/);});
+await check('G02','素材槽类型与重复连线拦截',()=>{const a=newNode('textInput'),b=newNode('videoGenerate');assert.match(validateGraph(document([a,b],[edge(a,b,'first_frame')])),/图片/);assert.match(validateGraph(document([a,b],[edge(a,b),edge(a,b)])),/重复/);});
+await check('S01','SQLite版本冲突与事务回滚',()=>{const s=new StudioStore(join(dir,'store-test'));try{const d=document([]);s.saveCanvas(d,0);assert.throws(()=>s.saveCanvas(d,0),/另一窗口/);assert.throws(()=>s.transaction(()=>{s.put('test','rollback',{ok:true});throw Error('rollback');}));assert.equal(s.get('test','rollback'),undefined);}finally{s.close();}});
+await check('S02','JSON主存档损坏后读取上次备份',async()=>{const p=join(dir,'json-test'),s=new DurableStore(p);s.set('canvdoai.audit','first');s.set('canvdoai.audit','second');await writeFile(join(p,'workspace.json'),'{corrupt');assert.equal(new DurableStore(p).get('canvdoai.audit'),'first');});
+const engine=new StudioEngine(join(dir,'engine'),{textModel:'audit-only'},()=>({origin:'http://127.0.0.1:1',token:'dummy'}));
+let generated=0;engine.generated=async(node)=>{generated++;return engine.addAsset({name:node.data.label,kind:'text',text:'模拟接口结果 '+generated,origin:{module:'canvas',projectId:'audit',itemId:node.id}});};
+const a=newNode('textInput'),b=newNode('textGenerate');a.data.prompt='中性文字测试';b.data.prompt='扩写一句';let doc=engine.store.saveCanvas(document([a,b],[edge(a,b)]),0);
+await check('C01','画布按拓扑执行并记录版本（模拟AI）',async()=>{engine.run(doc.id,undefined,false,'run-1');await engine.wait();assert.equal(engine.store.get('canvas-task','run-1').state,'SUCCEEDED');assert.equal(generated,1);doc=engine.store.get('canvas',doc.id);assert.equal(doc.nodes[1].data.versions.length,1);});
+await check('C02','重复继续不重复请求已完成节点（模拟AI）',async()=>{engine.run(doc.id,undefined,false,'run-2');await engine.wait();assert.equal(generated,1);});
+await check('C03','单节点重新生成保留旧候选（模拟AI）',async()=>{engine.run(doc.id,b.id,true,'run-3');await engine.wait();assert.equal(generated,2);assert.equal(engine.store.get('canvas',doc.id).nodes[1].data.versions.length,2);});
+await check('C04','迁移包导入保留候选与文字素材',async()=>{const bytes=await exportCanvas(engine,doc.id);const d=await importCanvas(engine,bytes);assert.equal(d.nodes[1].data.versions.length,2);assert.ok(engine.store.get('asset',d.nodes[1].data.versions[0].assetId));doc=d;});
+await check('C05','迁移后未修改内容应复用已付费结果',async()=>{const before=generated;engine.run(doc.id,undefined,false,'run-import');await engine.wait();assert.equal(generated-before,0,`迁移后继续产生 ${generated-before} 次额外生成调用（本次为模拟接口）`);});
+engine.store.close();
+await check('T01','同幂等键并发提交仅创建一次',async()=>{let count=0;const opt={directory:join(dir,'provider'),key:'parallel',account:'dummy',create:async()=>{count++;return{id:'job1',status:'succeeded',result_url:'https://example.invalid/result'};},poll:async()=>{throw Error('unexpected');}};await Promise.all([persistentVideoJob(opt),persistentVideoJob(opt)]);assert.equal(count,1);});
+await check('T02','轮询超时后按原ID恢复而不重新创建',async()=>{let created=0;const opt={directory:join(dir,'provider'),key:'timeout',account:'dummy',create:async()=>{created++;return{id:'job-timeout',status:'queued'};},poll:async id=>({id,status:'succeeded'}),deadlineMs:-1,intervalMs:1};await assert.rejects(persistentVideoJob(opt),/不会重新提交/);const result=await persistentVideoJob({...opt,deadlineMs:1000});assert.equal(result.id,'job-timeout');assert.equal(created,1);});
+await check('T03','提交结果未知时阻止盲目重复扣费',async()=>{let count=0;const opt={directory:join(dir,'provider'),key:'unknown',account:'dummy',create:async()=>{count++;throw Error('connection lost');},poll:async()=>({})};await assert.rejects(persistentVideoJob(opt));await assert.rejects(persistentVideoJob(opt),/结果未知/);assert.equal(count,1);});
+await check('T04','切换API账户不重复提交旧任务',async()=>{await assert.rejects(persistentVideoJob({directory:join(dir,'provider'),key:'timeout',account:'another-account',create:async()=>{throw Error('must not submit');},poll:async()=>({})}),/原API账户/);});
+await check('T05','已成功但临时下载地址过期时支持刷新任务结果',async()=>{const p=join(dir,'provider');await persistentVideoJob({directory:p,key:'expired',account:'dummy',create:async()=>({id:'job-expired',status:'succeeded',result_url:'https://example.invalid/expired'}),poll:async()=>({})});let polls=0;const r=await persistentVideoJob({directory:p,key:'expired',account:'dummy',create:async()=>{throw Error('must not submit');},poll:async()=>{polls++;return{id:'job-expired',status:'succeeded',result_url:'https://example.invalid/fresh'};}});assert.equal(r.result_url,'https://example.invalid/fresh',`仍返回旧下载地址；实际重新查询次数 ${polls}`);});
+await check('S03','强制终止独立进程后恢复27/40记录与远端任务ID',async()=>{const p=join(dir,'crash');const child=spawn(process.execPath,[resolve('scripts/full-audit-runtime-20260831.mjs'),'--crash-worker'],{env:{...process.env,AUDIT_PROFILE:p,AUDIT_BUNDLE:bundle},windowsHide:true,stdio:['ignore','pipe','pipe']});await new Promise((ok,bad)=>{const timer=setTimeout(()=>{child.kill();bad(Error('child ready timeout'));},15000);child.stdout.on('data',d=>{if(String(d).includes('AUDIT_READY')){clearTimeout(timer);ok();}});child.once('error',bad);child.once('exit',c=>{if(c)bad(Error('early exit '+c));});});const closed=new Promise(r=>child.once('exit',r));child.kill();await closed;const e=new StudioEngine(p,{},()=>({origin:'http://127.0.0.1:1',token:'dummy'}));assert.equal(e.store.get('canvas-task','interrupted').state,'PAUSED');assert.equal(e.store.get('canvas-task','interrupted').completed,27);assert.equal(e.store.get('asset','completed-asset').text,'已完成片段记录');e.store.close();let creates=0;const job=await persistentVideoJob({directory:p,key:'crash-video',account:'dummy-account',create:async()=>{creates++;return{};},poll:async id=>({id,status:'succeeded'}),intervalMs:1});assert.equal(job.id,'preserved-remote-id');assert.equal(creates,0);});
+const media=join(dir,'.local-generated-media'),images=join(dir,'.local-generated-assets');await mkdir(media,{recursive:true});await mkdir(images,{recursive:true});
+const pngName=randomUUID()+'.png',clipName=randomUUID()+'.mp4',silentName=randomUUID()+'.mp4';
+await runFile(process.env.FFMPEG_PATH,['-y','-v','error','-f','lavfi','-i','color=c=navy:s=480x854:d=2','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=2','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-c:a','aac','-shortest',join(media,clipName)],{windowsHide:true});
+await runFile(process.env.FFMPEG_PATH,['-y','-v','error','-i',join(media,clipName),'-frames:v','1',join(images,pngName)],{windowsHide:true});
+await runFile(process.env.FFMPEG_PATH,['-y','-v','error','-i',join(media,clipName),'-c:v','copy','-an',join(media,silentName)],{windowsHide:true});
+mock=createServer(async(req,res)=>{for await(const chunk of req){};res.setHeader('content-type','application/json');if(req.url==='/v1/audio/transcriptions')res.end(JSON.stringify({text:'测试字幕',segments:[{start:0,end:1.8,text:'测试字幕'}]}));else{res.statusCode=404;res.end('{}');}});await new Promise(r=>mock.listen(0,'127.0.0.1',r));
+const mockBase=`http://127.0.0.1:${mock.address().port}/v1`;
+const cfg={chatBase:mockBase,chatKey:'dummy-test',textModel:'mock',imageModel:'mock',videoBase:mockBase.slice(0,-3),videoKey:'',transcriptionBase:mockBase,transcriptionKey:'dummy-asr',transcriptionModel:'mock'};
+const {startLocalServer}=require('../build/server.cjs');const legacy=new DurableStore(dir);local=await startLocalServer({dataDir:dir,rendererDir:resolve('dist'),token:'audit-only-local-token',config:cfg,legacyStore:legacy});
+const call=async(path,body)=>{const response=await fetch(local.origin+path,{method:body?'POST':'GET',headers:{'x-canvdoai-session':'audit-only-local-token','content-type':'application/json'},body:body?JSON.stringify(body):undefined});return{status:response.status,data:await response.json()};};
+const post=body=>call('/api/test-ai/postproduction',body);
+const shot={id:'audit-shot',shotNumber:1,durationSec:2,imageUrl:'/api/test-ai/assets/'+pngName,dialogue:'旁白：测试字幕',action:'中性色卡'};
+const clip={id:'audit-clip',shotId:shot.id,shotNumber:1,durationSec:2,width:480,height:854,videoUrl:'/api/test-ai/media/'+clipName,hasEmbeddedAudio:true,generationMode:'IMAGE_TO_VIDEO',attempt:1};
+let audio,composed;
+await check('L01','本机服务拒绝无令牌和跨站来源请求',async()=>{assert.equal((await fetch(local.origin+'/api/studio/state')).status,403);assert.equal((await fetch(local.origin+'/api/studio/state',{headers:{'x-canvdoai-session':'audit-only-local-token',Origin:'https://example.invalid'}})).status,403);});
+await check('M07','原生音轨抽取与字幕生成（真实FFmpeg、模拟ASR）',async()=>{const r=await post({action:'AUDIO',shots:[shot],clips:[clip],audioMode:'SEEDANCE_NATIVE',width:480,height:854});assert.equal(r.status,200,JSON.stringify(r.data));audio=r.data;assert.ok(audio.audioTracks[0].audioUrl);assert.equal(audio.subtitleCues.length,1);});
+await check('M08','有效媒体及台词证据通过技术质检',async()=>{const r=await post({action:'QC',clips:[clip],...audio,width:480,height:854});assert.equal(r.status,200);assert.equal(r.data.qc.passed,true,JSON.stringify(r.data));});
+await check('M08b','无音轨镜头标记具体镜头缺失音轨',async()=>{const r=await post({action:'QC',clips:[{...clip,videoUrl:'/api/test-ai/media/'+silentName}],...audio,width:480,height:854});assert.ok(r.data.qc.issues.some(i=>i.code==='SEEDANCE_AUDIO_MISSING'&&i.shotId===shot.id));});
+await check('M09','真实时间线合成含音轨与底部字幕ASS',async()=>{const r=await post({action:'COMPOSE',clips:[clip],...audio,width:480,height:854});assert.equal(r.status,200,JSON.stringify(r.data));composed=r.data;const file=join(media,composed.composedVideoUrl.split('/').at(-1));const {stdout}=await runFile(process.env.FFPROBE_PATH,['-v','error','-show_streams','-show_format','-of','json',file],{windowsHide:true});const p=JSON.parse(stdout);assert.ok(p.streams.some(s=>s.codec_type==='audio'));assert.equal(p.streams.find(s=>s.codec_type==='video').width,480);return{file,duration:p.format.duration};});
+await check('M10','成片/字幕/封面/工程及ZIP导出',async()=>{const r=await post({action:'EXPORT',projectId:'audit-project',title:'隔离媒体检查',clips:[clip],...audio,...composed,coverUrl:shot.imageUrl,width:480,height:854});assert.equal(r.status,200,JSON.stringify(r.data));for(const k of ['mp4Url','subtitleUrl','coverUrl','projectUrl','packageUrl'])assert.ok(r.data.export[k]);return r.data.export;});
+const bridge=new StudioEngine(dir,cfg,()=>({origin:local.origin,token:'audit-only-local-token'}));
+const image=await bridge.addAsset({name:'中性检查图片',kind:'image',bytes:await readFile(join(images,pngName)),origin:{module:'canvas',projectId:'audit-project'}});
+const video=await bridge.addAsset({name:'中性检查视频',kind:'video',bytes:await readFile(join(media,clipName)),origin:{module:'canvas',projectId:'audit-project'}});
+await check('L02','归档视频支持Range播放',async()=>{const r=await fetch(local.origin+video.url,{headers:{'x-canvdoai-session':'audit-only-local-token',Range:'bytes=0-99'}});assert.equal(r.status,206);assert.equal((await r.arrayBuffer()).byteLength,100);});
+await check('B01','画布回写保留历史并撤回相关采用状态',async()=>{legacy.setMany({'canvdoai.preproduction.audit-project':JSON.stringify({confirmed:true,updatedAt:'2026-01-01',result:{shots:[shot]}}),'canvdoai.postproduction.audit-project':JSON.stringify({result:{clips:[clip],videoCandidates:[clip],clipApprovals:[{shotId:shot.id,status:'APPROVED'}],audioTracks:audio.audioTracks}})});await applyCanvasAsset(bridge,legacy,image,{module:'oneclick',projectId:'audit-project',itemId:shot.id,field:'shot-image',sourceUrl:shot.imageUrl});const pre=JSON.parse(legacy.get('canvdoai.preproduction.audit-project'));const after=JSON.parse(legacy.get('canvdoai.postproduction.audit-project'));assert.equal(pre.confirmed,false);assert.equal(after.result.videoCandidates.length,1);assert.equal(after.result.clips.length,0);assert.equal(after.result.clipApprovals[0].status,'PENDING');});
+await check('B02','回写图片后可被一键成片06本地动态预览接受（非AI）',async()=>{const r=await post({action:'VIDEO_CLIP',shot:{...shot,imageUrl:image.url},width:480,height:854});assert.notEqual(r.data.code,'INVALID_GENERATED_URL',JSON.stringify(r));assert.ok(!JSON.stringify(r.data).includes('INVALID_GENERATED_URL'),JSON.stringify(r));assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.data.clip.generationMode,'MOTION_FALLBACK');});
+await check('B03','有效画布视频在一键成片质检中可读取',async()=>{const r=await post({action:'QC',clips:[{...clip,videoUrl:video.url}],...audio,width:480,height:854});assert.ok(!r.data.qc.issues.some(i=>i.code==='CLIP_UNREADABLE'),JSON.stringify(r.data.qc.issues));});
+await check('B04','画布视频可继续合成',async()=>{const r=await post({action:'COMPOSE',clips:[{...clip,videoUrl:video.url}],...audio,width:480,height:854});assert.equal(r.status,200,JSON.stringify(r));});
+await check('B05','画布视频原生音轨可提取并合成（模拟ASR）',async()=>{const r=await post({action:'AUDIO',shots:[shot],clips:[{...clip,videoUrl:video.url}],audioMode:'SEEDANCE_NATIVE',width:480,height:854});assert.equal(r.status,200,JSON.stringify(r));const track=await bridge.addAsset({name:'中性音轨',kind:'audio',url:r.data.audioTracks[0].audioUrl,origin:{module:'canvas',projectId:'audit-project'}});const result=await post({action:'COMPOSE',clips:[{...clip,videoUrl:video.url}],...r.data,audioTracks:[{...r.data.audioTracks[0],audioUrl:track.url}],width:480,height:854});assert.equal(result.status,200,JSON.stringify(result));});
+await check('B06','JPG共享分镜可生成本地预览并导出真正PNG封面',async()=>{const path=join(dir,'cover.jpg');await runFile(process.env.FFMPEG_PATH,['-y','-v','error','-i',join(images,pngName),'-frames:v','1',path],{windowsHide:true});const jpeg=await bridge.addAsset({name:'JPG分镜',kind:'image',bytes:await readFile(path),origin:{module:'canvas',projectId:'audit-project'}});assert.ok(jpeg.url.endsWith('.jpg'));const preview=await post({action:'VIDEO_CLIP',shot:{...shot,imageUrl:jpeg.url},width:480,height:854});assert.equal(preview.status,200,JSON.stringify(preview));const result=await post({action:'EXPORT',projectId:'audit-project',title:'共享素材导出',clips:[{...clip,videoUrl:video.url}],...audio,...composed,coverUrl:jpeg.url,width:480,height:854});assert.equal(result.status,200,JSON.stringify(result));const cover=await readFile(join(media,result.data.export.coverUrl.split('/').at(-1)));assert.deepEqual([...cover.subarray(0,8)],[137,80,78,71,13,10,26,10]);});
+bridge.store.close();
+}finally{local?.close();if(mock)await new Promise(r=>mock.close(r));}
+const report={date:new Date().toISOString(),temporaryProfile:dir,paidCalls:0,realAIGeneration:false,note:'修复后回归：AI使用本地模拟接口；原生媒体处理、SQLite、文件和进程中断为真实本地执行。旧审计报告单独保留。',results};
+await mkdir('docs/validation',{recursive:true});await writeFile('docs/validation/runtime-after-fixes-20260831.json',JSON.stringify(report,null,2));
+console.log(JSON.stringify({pass:results.filter(r=>r.status==='PASS').length,fail:results.filter(r=>r.status==='FAIL').length,temporaryProfile:dir},null,2));
+if(results.some(result=>result.status==='FAIL'))process.exitCode=1;
+}

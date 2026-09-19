@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","compilerOptions":{"types":["node"],"lib":["ES2022","DOM","DOM.Iterable"]},"include":["electron","runtime","modules/dramaforge/lib","modules/dramaforge/app/api"],"exclude":[]}

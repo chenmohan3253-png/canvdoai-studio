@@ -1,0 +1,27 @@
+[
+  {
+    "version": "19.2.6",
+    "license_file": "third-party-notices/react-LICENSE",
+    "name": "react"
+  },
+  {
+    "version": "19.2.6",
+    "license_file": "third-party-notices/react-dom-LICENSE",
+    "name": "react-dom"
+  },
+  {
+    "version": "0.27.0",
+    "license_file": "third-party-notices/scheduler-LICENSE",
+    "name": "scheduler"
+  },
+  {
+    "version": "1.33.0",
+    "license_file": "third-party-notices/lucide-react-LICENSE",
+    "name": "lucide-react"
+  },
+  {
+    "version": "2.3.0",
+    "license_file": "third-party-notices/noble-hashes-LICENSE",
+    "name": "@noble/hashes"
+  }
+]

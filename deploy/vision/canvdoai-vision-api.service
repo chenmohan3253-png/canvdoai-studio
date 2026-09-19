@@ -1,0 +1,26 @@
+[Unit]
+Description=CanvDoAI Stateless Vision API
+After=network-online.target canvdoai-vision-ollama.service
+Wants=network-online.target
+Requires=canvdoai-vision-ollama.service
+
+[Service]
+Type=simple
+User=zbkj
+Group=zbkj
+EnvironmentFile=/etc/canvdoai-vision.env
+Environment=CANVDOAI_VISION_HOST=0.0.0.0
+Environment=CANVDOAI_VISION_PORT=8000
+Environment=CANVDOAI_VISION_UPSTREAM=http://127.0.0.1:11434
+Environment=CANVDOAI_VISION_MODEL=qwen3-vl:4b
+Environment=CANVDOAI_VISION_MAX_BODY=67108864
+ExecStart=/usr/bin/python3 /opt/canvdoai-vision/vision_proxy.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

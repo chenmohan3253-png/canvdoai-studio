@@ -1,0 +1,17 @@
+import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import assert from 'node:assert/strict';
+const dir=await mkdtemp(join(tmpdir(),'canvdoai-electron-smoke-'));
+const env={...process.env,CANVDOAI_TEST_DATA:dir};delete env.ELECTRON_RUN_AS_NODE;
+const packagedExecutable=process.argv[2];
+const child=spawn(resolve(packagedExecutable||'node_modules/electron/dist/electron.exe'),packagedExecutable?['--smoke-test']:['.','--smoke-test'],{env,windowsHide:true,stdio:'pipe'});
+let error='';child.stderr.on('data',c=>error=(error+c).slice(-4000));
+const exit=await new Promise((done,reject)=>{const timer=setTimeout(()=>{child.kill();reject(Error('Electron启动测试超时：'+error));},40000);child.on('error',reject);child.on('exit',code=>{clearTimeout(timer);done(code);});});
+assert.equal(exit,0,error);
+const report=JSON.parse(await readFile(join(dir,'smoke-result.json'),'utf8'));
+assert.equal(report.bridge,true);assert.ok(report.probe.startsWith('ffprobe version'));
+assert.ok(report.embedded?.includes(true),'重制模块必须实际挂载，不能只有空壳');
+assert.equal(report.encrypted,true,'Windows系统密钥加密服务必须可用');
+await mkdir('docs/validation',{recursive:true});await writeFile('docs/validation/electron-smoke.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));

@@ -1,0 +1,95 @@
+{
+  "name": "canvdoai-desktop",
+  "version": "1.1.2",
+  "private": false,
+  "description": "CanvDoAI 本地创作工作室：画布与一键成片",
+  "author": "CanvDoAI",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chenmomo3253-boop/canvdoai-studio.git"
+  },
+  "type": "module",
+  "main": "build/main.cjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "package": "npm run build && electron-builder --win nsis --x64",
+    "test:desktop": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.3.0",
+    "@xyflow/react": "12.11.5",
+    "connect": "3.7.0",
+    "fflate": "0.8.3",
+    "lucide-react": "^1.33.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "7.18.3",
+    "socket.io-client": "4.8.1",
+    "wavesurfer.js": "7.12.11"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.1.0",
+    "@types/connect": "3.4.38",
+    "@types/node": "22.10.5",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.3.4",
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.12",
+    "jsdom": "25.0.1",
+    "typescript": "5.7.2",
+    "vite": "6.4.3",
+    "vitest": "4.1.11"
+  },
+  "build": {
+    "appId": "com.canvdoai.studio.desktop",
+    "productName": "CanvDoAI Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "build/**/*",
+      "!build/docs/**/*",
+      "!build/**/*.map",
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/ffmpeg",
+        "to": "ffmpeg"
+      },
+      {
+        "from": "docs",
+        "to": "docs",
+        "filter": [
+          "**/*",
+          "!validation{,/**/*}"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "CanvDoAI 创作工作室",
+      "artifactName": "CanvDoAI-Studio-${version}-Setup.exe",
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ]
+    }
+  }
+}
