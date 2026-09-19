@@ -4,6 +4,14 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 
 本仓库仅包含桌面客户端和通用 API 适配层，不包含任何生产 API Key、计费后台、企业授权服务或官方托管接口。CanvDoAI 名称和 Logo 不包含在源码许可证授权范围内。
 
+## Windows 安装包直接下载
+
+- [下载 CanvDoAI Studio 1.1.6 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.6/CanvDoAI-Studio-1.1.6-Setup.exe)
+- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.6/CanvDoAI-Studio-1.1.6-SHA256.txt)
+- [查看完整发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.6)
+
+安装包适用于 Windows 10/11 x64，已经内置 FFmpeg/FFprobe，不需要另外安装 Node.js、Python或本地大模型。当前安装包尚未进行企业代码签名，Windows SmartScreen 可能显示“未知发布者”；请确认下载来源为本仓库并核对 SHA-256：`B5D5B176BF0E32E1BF5135BC773B29C4E47D8712BBF3F88829747CA39B6021BF`。软件安装后可直接打开，但AI生成需要在“API 接口设置”中填写有效接口和密钥。
+
 ## 功能
 
 - 节点式创作画布与跨模块素材联动
