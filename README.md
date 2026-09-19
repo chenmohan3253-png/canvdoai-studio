@@ -49,7 +49,7 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 
 ## 扫码联系客服
 
-购买或测试剧本、图片、分镜、视频、视觉分析和语音 API，可使用微信扫描下方二维码。添加时建议备注“API购买”或“工作室部署”。请勿通过公开 Issue 提交 API Key、账号密码或客户素材。
+购买或测试剧本、图片、分镜、视频、视觉分析和语音 API，可使用微信扫描下方二维码，或发送邮件至 **chenmomo3253@gmail.com**。添加时建议备注“API购买”或“工作室部署”。请勿通过公开 Issue 提交 API Key、账号密码或客户素材。
 
 <img src="src/assets/canvdoai-wechat-contact.png" alt="CanvDoAI 官方微信二维码" width="360" />
 

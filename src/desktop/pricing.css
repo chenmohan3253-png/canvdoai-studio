@@ -11,6 +11,8 @@
 .pricing-callout { display: flex; align-items: center; justify-content: space-between; gap: 22px; margin: 22px 0; padding: 18px 20px; border: 1px solid #394763; border-radius: 14px; background: linear-gradient(135deg, #151c2b, #1a2032); }
 .pricing-callout strong { font-size: 17px; }
 .pricing-callout p { margin: 5px 0 0; color: #aeb8cc; line-height: 1.6; }
+.pricing-callout a, .contact-email a { color: #9dc4ff; text-decoration: none; overflow-wrap: anywhere; }
+.pricing-callout a:hover, .contact-email a:hover { text-decoration: underline; }
 .pricing-callout img { width: 96px; height: 96px; object-fit: cover; border-radius: 12px; background: #fff; }
 .pricing-table-wrap { overflow: auto; border: 1px solid #31394c; border-radius: 15px; }
 .pricing-table { width: 100%; min-width: 780px; border-collapse: collapse; background: #111621; }
@@ -22,6 +24,7 @@
 .pricing-table td strong { color: #eaf1ff; font-size: 15px; }
 .pricing-table td small { color: #91a0b8; }
 .pricing-footnote { padding: 14px 16px; border: 1px solid #5a4c2d; border-radius: 11px; background: #262014; color: #d7c7a8; font-size: 13px; line-height: 1.65; }
+.contact-email { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 18px 0 4px; padding: 13px 15px; border: 1px solid #33415a; border-radius: 11px; background: #101726; }
 
 @media (max-width: 700px) {
   .pricing-callout { align-items: flex-start; }

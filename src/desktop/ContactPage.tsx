@@ -25,6 +25,7 @@ export function ContactPage() {
         </article>
         <article className="contact-services">
           <span className="contact-badge">可咨询服务</span><h2>从接口测试到正式生产</h2>
+          <div className="contact-email"><strong>联系邮箱</strong><a href="mailto:chenmomo3253@gmail.com">chenmomo3253@gmail.com</a></div>
           <ul><li><strong>API 购买</strong><span>剧本、图片、分镜、视频、视觉分析与语音能力</span></li><li><strong>额度充值</strong><span>按实际模型和清晰度确认价格与可用能力</span></li><li><strong>工作室部署</strong><span>本地安装、统一接口、团队使用与数据迁移</span></li><li><strong>技术支持</strong><span>接口兼容、模型目录、生成失败与工作流排查</span></li></ul>
           <div className="contact-safety"><strong>安全提醒</strong><p>请勿把 API Key、登录密码或客户素材直接发送给陌生人。购买前请确认模型、计费单位、有效期和退款规则。</p></div>
         </article>
