@@ -14,6 +14,7 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 - 本地加密 API 配置、项目持久化和迁移包
 - OpenAI-compatible 文本、图像、视觉和语音接口适配
 - Dispatch/Seedance 风格的视频任务接口适配
+- 内置“购买 API / 联系我们”页面、官方微信二维码和接口设置购买入口
 
 ## 开发
 

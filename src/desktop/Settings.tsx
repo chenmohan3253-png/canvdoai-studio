@@ -2,6 +2,7 @@ import {useEffect,useState} from 'react';
 import type {DesktopConfig} from '../../electron/config';
 import type {ConfigView} from './bridge';
 import {VisionSettings} from './VisionSettings';
+import contactQr from '../assets/canvdoai-wechat-contact.png';
 export function Settings(){
   const [view,setView]=useState<ConfigView>();const [draft,setDraft]=useState<Partial<DesktopConfig>>({});
   const [notice,setNotice]=useState('');const [busy,setBusy]=useState('');const [visionBusy,setVisionBusy]=useState(false);const [models,setModels]=useState<Record<string,string[]>>({});
@@ -14,6 +15,7 @@ export function Settings(){
   const modelField=(label:string,key:keyof DesktopConfig,kind:string)=><label>{label}<input disabled={!!busy||visionBusy} list={`${kind}-models`} value={value(key)} onChange={e=>change(key,e.target.value)}/><datalist id={`${kind}-models`}>{(models[kind]??[]).map(m=><option key={m} value={m}/>)}</datalist></label>;
   return <section className="desk-page"><div className="page-heading"><div><span className="eyebrow">API CONNECTIONS</span><h1>接口设置</h1><p>在这里统一配置画布、一键成片与视频重制。已有密钥不修改即保留；使用下方按钮可清除。</p></div><button className="primary" disabled={!!busy||visionBusy||!window.desktop} onClick={save}>{busy==='save'?'保存中…':'保存全部配置'}</button></div>
     {!window.desktop&&<p className="notice">当前为浏览器预览。API 密钥管理仅在安装后的桌面软件中启用。</p>}
+    <aside className="api-sales-card" aria-label="购买 API 联系方式"><img src={contactQr} alt="CanvDoAI 官方微信二维码"/><div><strong>还没有可用 API？</strong><p>联系 CanvDoAI 咨询剧本、图片、视频与视觉分析接口，购买前可先确认模型和计费方式。</p></div><a href="#/contact">查看官方二维码</a></aside>
     <div className="settings-grid">
       <VisionSettings view={view} draft={draft} change={change} disabled={!!busy} onBusy={setVisionBusy}/>
       <article><span className="step">01</span><h2>剧本 / 文本生成</h2><p>OpenAI-compatible · /chat/completions</p>{field('API Base URL','chatBase')}{field('API Key','chatKey',view?.chatConfigured?'已保存，留空保留':'输入密钥','password')}{modelField('文本模型 ID','textModel','chat')}<button disabled={!!busy} onClick={()=>test('chat')}>{busy==='chat'?'检测中…':'测试连接 / 读取模型'}</button><small>{view?.chatConfigured?'密钥已保存':'尚未配置'}</small></article>
