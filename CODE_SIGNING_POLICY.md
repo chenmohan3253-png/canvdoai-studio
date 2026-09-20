@@ -6,7 +6,7 @@ CanvDoAI Studio applies for free Open Source code signing provided by SignPath.i
 
 Only official CanvDoAI Studio release artifacts built from this public repository may be submitted for release signing. Test builds, local modifications, third-party projects, customer material, API credentials, and artifacts whose source origin cannot be verified must not be submitted.
 
-The current Windows release artifact is the NSIS installer named `CanvDoAI-Studio-<version>-Setup.exe`. A signed release must be produced by the public GitHub Actions workflow from a tagged commit in this repository. The workflow must run on a GitHub-hosted runner and must not accept executable input from an untrusted source.
+The current Windows release artifact is the NSIS installer named `CanvDoAI-Studio-<version>-Setup.exe`. A signed release must be produced by the public GitHub Actions workflow from a tagged commit in this repository. The workflow must run on a GitHub-hosted runner and must not accept executable input from an untrusted source. Until SignPath approves and provisions the project, the release workflow deliberately labels its output as unsigned.
 
 ## Team roles
 
@@ -32,4 +32,3 @@ See [PRIVACY.md](PRIVACY.md). CanvDoAI Studio does not send telemetry to the pro
 ## Security reports
 
 Security issues must be reported through GitHub Security Advisories as described in [SECURITY.md](SECURITY.md). Do not disclose API keys, customer material, or vulnerability details in a public issue.
-

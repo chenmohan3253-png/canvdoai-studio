@@ -1,0 +1,76 @@
+name: Build unsigned Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download pinned FFmpeg build
+        shell: pwsh
+        run: |
+          $downloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-19-13-11/ffmpeg-n8.1.2-54-gc573a95381-win64-gpl-8.1.zip"
+          $expectedSha256 = "8A7BC5343C874B4645FCF0D7A2E441DA23573D3EDDD1F5993C10A8F1226A6889"
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
+          $expanded = Join-Path $env:RUNNER_TEMP "ffmpeg"
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $archive
+          $actualSha256 = (Get-FileHash $archive -Algorithm SHA256).Hash
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "FFmpeg archive checksum mismatch: $actualSha256"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          New-Item -ItemType Directory -Force -Path "vendor/ffmpeg" | Out-Null
+          $ffmpeg = Get-ChildItem $expanded -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $ffprobe = Get-ChildItem $expanded -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          $license = Get-ChildItem $expanded -Recurse -Filter "LICENSE.txt" | Select-Object -First 1
+          if (-not $ffmpeg -or -not $ffprobe -or -not $license) {
+            throw "Pinned FFmpeg package does not contain the expected files"
+          }
+          Copy-Item $ffmpeg.FullName "vendor/ffmpeg/ffmpeg.exe"
+          Copy-Item $ffprobe.FullName "vendor/ffmpeg/ffprobe.exe"
+          Copy-Item $license.FullName "vendor/ffmpeg/LICENSE"
+
+      - name: Verify source and tests
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Package unsigned installer
+        run: npm run package
+
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release -Filter "CanvDoAI-Studio-*-Setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Installer was not produced" }
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash
+          "$hash  $($installer.Name)" | Set-Content -Encoding ascii "release/$($installer.BaseName)-SHA256.txt"
+
+      - name: Upload unsigned release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: canvdoai-studio-windows-unsigned
+          path: |
+            release/CanvDoAI-Studio-*-Setup.exe
+            release/CanvDoAI-Studio-*-SHA256.txt
+          if-no-files-found: error
+
