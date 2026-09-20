@@ -108,3 +108,11 @@ npm start
 源代码按 GNU Affero General Public License v3.0 or later 发布，详见 [LICENSE](LICENSE)。第三方组件许可见 `docs/third-party-notices/`。
 
 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告，不要在公开 Issue 中提交 API Key、客户素材或个人信息。
+
+## Code signing policy
+
+本项目正在申请由 SignPath Foundation 提供证书的免费开源代码签名。申请及后续签名只覆盖从本公开仓库、官方版本标签和受控 GitHub Actions 工作流生成的正式发布物。
+
+- [代码签名政策](CODE_SIGNING_POLICY.md)
+- [隐私政策](PRIVACY.md)
+- Free code signing provided by SignPath.io, certificate by SignPath Foundation
