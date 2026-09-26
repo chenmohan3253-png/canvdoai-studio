@@ -7,7 +7,7 @@ export interface StudioAsset { id:string; name:string; kind:MediaKind; url?:stri
 export interface CanvasVersion { id:string; assetId:string; fingerprint:string; createdAt:string; }
 export interface CanvasNode {
   id:string; type:'studio'; position:{x:number;y:number}; selected?:boolean;
-  data:{label:string;kind:NodeKind;prompt:string;assetId?:string;model?:string;size?:string;duration:number;resolution:string;aspectRatio:string;seed?:number;selectedVersion?:string;versions:CanvasVersion[];origin?:AssetOrigin};
+  data:{label:string;kind:NodeKind;prompt:string;assetId?:string;model?:string;size?:string;duration:number;resolution:string;aspectRatio:string;seed?:number;generateAudio?:boolean;selectedVersion?:string;versions:CanvasVersion[];origin?:AssetOrigin};
 }
 export interface CanvasEdge {id:string;source:string;target:string;sourceHandle?:string|null;targetHandle?:string|null;selected?:boolean;}
 export interface CanvasDocument {id:string;name:string;projectId:string;revision:number;nodes:CanvasNode[];edges:CanvasEdge[];viewport?:{x:number;y:number;zoom:number};updatedAt:string;}

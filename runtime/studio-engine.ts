@@ -12,6 +12,25 @@ import {VIDEO_PROMPT_SUFFIX} from '../src/desktop/video-prompt-tools';
 const hash=(v:unknown)=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const now=()=>new Date().toISOString();
 class StudioValidationError extends Error {readonly failureStage='VALIDATION';}
+function providerErrorText(data:any,key:string){
+  const root=data?.error??data;
+  const code=typeof root?.code==='string'?root.code:typeof data?.code==='string'?data.code:'';
+  const raw=root?.message??root?.detail??data?.message??data?.detail??data?.errors;
+  let detail='';
+  if(Array.isArray(raw))detail=raw.map((item:any)=>{
+    if(typeof item==='string')return item;
+    const where=Array.isArray(item?.loc)?item.loc.filter((part:any)=>part!=='body'&&part!=='query').join('.'):(item?.path||'');
+    const message=item?.msg??item?.message??JSON.stringify(item);
+    return `${where?`${where}: `:''}${message}`;
+  }).join('; ');
+  else if(typeof raw==='string')detail=raw;
+  else if(raw!==undefined)detail=JSON.stringify(raw);
+  else if(data&&typeof data==='object')detail=JSON.stringify(data);
+  detail=detail.replace(/Bearer\s+[^\s"']+/gi,'Bearer [已隐藏]').replace(/(?:api[_-]?key|access[_-]?token)(["'\s:=]+)[^\s,"'}]+/gi,'$1[已隐藏]');
+  if(key)detail=detail.split(key).join('[API Key 已隐藏]');
+  detail=detail.slice(0,1200);
+  return `${code?` ${code}`:''}${detail?`：${detail}`:''}`;
+}
 export class StudioEngine {
   readonly store:StudioStore;private running=new Map<string,Promise<void>>();private stopped=false;
   constructor(readonly directory:string,private config:Record<string,string>,private local:()=>{origin:string;token:string}){this.store=new StudioStore(directory);this.store.recover();}
@@ -25,7 +44,7 @@ export class StudioEngine {
     const init:RequestInit={method:body||form?'POST':'GET',headers:{Authorization:`Bearer ${key}`,...(!form&&body?{'content-type':'application/json'}:{})},body:form??(body?JSON.stringify(body):undefined),redirect:'error',signal:AbortSignal.timeout(180000)};
     const response=path.startsWith('/v1/')?await videoGatewayFetch({...this.config,videoBase:base,videoKey:key},path,init):await fetch(base.replace(/\/+$/,'')+path,init);
     const data=await response.json().catch(()=>null);
-    if(!response.ok)throw Error(`接口 ${path} 返回 HTTP ${response.status}，请检查权限、模型、额度和参数`);
+    if(!response.ok)throw Error(`接口 ${path} 返回 HTTP ${response.status}${providerErrorText(data,key)||'：服务商未提供详细错误信息'}`);
     if(!data)throw Error('接口未返回JSON数据');return data;
   }
   async readUrl(url:string,max=256*1024*1024){
@@ -97,10 +116,16 @@ export class StudioEngine {
     if(references.length>referenceLimit)throw new StudioValidationError(`参数校验失败：当前 ${references.length} 个参考素材，超过 ${modelId} 上限 ${referenceLimit} 个。任务未提交，不会产生视频费用。`);
     const assets:Record<string,unknown>[]=[];
     for(const [i,input]of references.entries()){
-      const bytes=await this.readUrl(input.asset.url!);const form=new FormData();const mime=input.asset.kind==='image'?'image/png':input.asset.kind==='video'?'video/mp4':'audio/mp4';form.set('file',new Blob([bytes],{type:mime}),input.asset.kind==='image'?'reference.png':input.asset.kind==='video'?'reference.mp4':'reference.m4a');
+      const bytes=await this.readUrl(input.asset.url!);const form=new FormData();
+      const extension=new URL(input.asset.url!,this.local().origin).pathname.split('.').at(-1)?.toLowerCase();
+      const imageMime=extension==='jpg'||extension==='jpeg'?'image/jpeg':extension==='webp'?'image/webp':'image/png';
+      const mime=input.asset.kind==='image'?imageMime:input.asset.kind==='video'?'video/mp4':'audio/mpeg';
+      const fileName=input.asset.kind==='image'?`reference.${extension==='jpeg'?'jpg':['jpg','webp'].includes(extension||'')?extension:'png'}`:input.asset.kind==='video'?'reference.mp4':'reference.mp3';
+      form.set('file',new Blob([bytes],{type:mime}),fileName);
       const uploaded=await this.request(cfg.videoBase,cfg.videoKey,'/v1/assets',undefined,form);assets.push({...uploaded,url:uploaded.cdn_url,role:input.slot,order:i});
     }
-    const result=await readVideoJobResult({directory:this.directory,key,account:accountFingerprint(cfg.videoBase,cfg.videoKey),create:()=>this.request(cfg.videoBase,cfg.videoKey,'/v1/video-jobs',{idempotency_key:key,model:modelId,capability,prompt:videoPrompt,parameters:{duration_seconds:node.data.duration,resolution:node.data.resolution,aspect_ratio:node.data.aspectRatio,generate_audio:true,...(Number.isInteger(node.data.seed)?{seed:node.data.seed}:{})},assets,allow_fallback:false}),poll:id=>this.request(cfg.videoBase,cfg.videoKey,'/v1/video-jobs/'+encodeURIComponent(id))},url=>this.readUrl(url));
+    const wanModel=modelId.startsWith('wan-3.0');
+    const result=await readVideoJobResult({directory:this.directory,key,account:accountFingerprint(cfg.videoBase,cfg.videoKey),create:()=>this.request(cfg.videoBase,cfg.videoKey,'/v1/video-jobs',{idempotency_key:key,model:modelId,capability,prompt:videoPrompt,parameters:{duration_seconds:node.data.duration,resolution:node.data.resolution,aspect_ratio:node.data.aspectRatio,generate_audio:node.data.generateAudio!==false,...(Number.isInteger(node.data.seed)?{seed:node.data.seed}:{})},assets,allow_fallback:false}),poll:id=>this.request(cfg.videoBase,cfg.videoKey,(wanModel?'/v1/wan-tasks/':'/v1/video-jobs/')+encodeURIComponent(id))},url=>this.readUrl(url));
     return this.addAsset({name:node.data.label,kind:'video',bytes:result.value,origin});
   }
   run(canvasId:string,nodeId:string|undefined,force:boolean,requestId:string){
@@ -124,13 +149,14 @@ export class StudioEngine {
           const fingerprints=nodeFingerprints(node,inputs,this.config,this.store.get<StudioAsset>('asset',node.data.assetId||''));
           const fingerprint=fingerprints.current;
           const selected=node.data.versions.find(v=>v.id===node.data.selectedVersion);
-          const reused=Boolean(selected&&[fingerprint,fingerprints.legacy].includes(selected.fingerprint))&&!(force&&id===nodeId);
+          const allowLegacy=node.data.kind!=='videoGenerate'||node.data.generateAudio!==false;
+          const reused=Boolean(selected&&[fingerprint,...(allowLegacy?[fingerprints.legacy]:[])].includes(selected.fingerprint))&&!(force&&id===nodeId);
           if(reused&&selected!.fingerprint!==fingerprint){selected!.fingerprint=fingerprint;doc=this.store.saveCanvas(doc,doc.revision);}
           if(!reused){
             const makeIntent=(value:string)=>hash(task.canvasId+':'+id+':'+value+':'+(force&&id===nodeId?task.id:'reuse'));
             const oldIntent=makeIntent(fingerprints.legacy);
             // Upgrade must not strand an in-flight paid request under its old fingerprint.
-            const intentKey=this.store.get('node-intent',oldIntent)||this.store.get('node-result',oldIntent)||this.store.get('provider-task',`canvas-${oldIntent}`)?oldIntent:makeIntent(fingerprint);
+            const intentKey=allowLegacy&&(this.store.get('node-intent',oldIntent)||this.store.get('node-result',oldIntent)||this.store.get('provider-task',`canvas-${oldIntent}`))?oldIntent:makeIntent(fingerprint);
             let asset:StudioAsset|undefined;
             const finished=this.store.get<{assetId:string}>('node-result',intentKey);if(finished)asset=this.store.get<StudioAsset>('asset',finished.assetId);
             if(!asset){

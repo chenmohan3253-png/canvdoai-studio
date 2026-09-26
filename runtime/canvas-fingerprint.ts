@@ -13,7 +13,7 @@ export function nodeFingerprints(node:CanvasNode,inputs:NodeInput[],config:Recor
   const parameters={kind:node.data.kind,prompt:node.data.prompt,assetId:node.data.assetId,model:node.data.model||config[node.data.kind==='textGenerate'?'textModel':'imageModel'],size:node.data.size,duration:node.data.duration,resolution:node.data.resolution,aspectRatio:node.data.aspectRatio,seed:node.data.seed};
   return {
     legacy:digest({...parameters,inputs:inputs.map(i=>[i.slot,i.asset.id])}),
-    current:'v2:'+digest({...parameters,assetId:assetIdentity(ownAsset,node.data.assetId),inputs:inputs.map(i=>[i.slot,assetIdentity(i.asset)])}),
+    current:'v2:'+digest({...parameters,generateAudio:node.data.kind==='videoGenerate'&&node.data.generateAudio===false?false:undefined,assetId:assetIdentity(ownAsset,node.data.assetId),inputs:inputs.map(i=>[i.slot,assetIdentity(i.asset)])}),
   };
 }
 /** Upgrade only a proven-current selection. Edited/stale outputs must stay invalid. */
@@ -25,6 +25,6 @@ export function upgradeCanvasFingerprints(doc:CanvasDocument,assets:StudioAsset[
     for(const edge of edges){const source=doc.nodes.find(n=>n.id===edge.source);const version=source?.data.versions.find(v=>v.id===source.data.selectedVersion);const asset=byId.get(version?.assetId||source?.data.assetId||'');if(asset)inputs.push({slot:edge.targetHandle||'prompt',asset});}
     if(inputs.length!==edges.length)continue;
     const fingerprints=nodeFingerprints(node,inputs,config,byId.get(node.data.assetId||''));
-    if(selected.fingerprint===fingerprints.legacy)selected.fingerprint=fingerprints.current;
+    if(selected.fingerprint===fingerprints.legacy&&(node.data.kind!=='videoGenerate'||node.data.generateAudio!==false))selected.fingerprint=fingerprints.current;
   }
 }

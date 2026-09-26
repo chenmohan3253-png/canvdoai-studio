@@ -6,11 +6,11 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 
 ## Windows 安装包直接下载
 
-- [下载 CanvDoAI Studio 1.1.6 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.6/CanvDoAI-Studio-1.1.6-Setup.exe)
-- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.6/CanvDoAI-Studio-1.1.6-SHA256.txt)
-- [查看完整发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.6)
+- [下载 CanvDoAI Studio 1.1.9 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.9/CanvDoAI-Studio-1.1.9-Setup.exe)
+- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.9/CanvDoAI-Studio-1.1.9-Setup-SHA256.txt)
+- [查看 1.1.9 发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.9)
 
-安装包适用于 Windows 10/11 x64，已经内置 FFmpeg/FFprobe，不需要另外安装 Node.js、Python或本地大模型。当前安装包尚未进行企业代码签名，Windows SmartScreen 可能显示“未知发布者”；请确认下载来源为本仓库并核对 SHA-256：`B5D5B176BF0E32E1BF5135BC773B29C4E47D8712BBF3F88829747CA39B6021BF`。软件安装后可直接打开，但AI生成需要在“API 接口设置”中填写有效接口和密钥。
+安装包适用于 Windows 10/11 x64，已经内置 FFmpeg/FFprobe 和本机 MCP 所需运行时，不需要另外安装 Node.js、Python 或本地大模型。当前安装包尚未进行企业代码签名，Windows SmartScreen 可能显示“未知发布者”；请确认下载来源为本仓库并核对同一 Release 页面提供的 SHA-256。软件安装后可直接打开，但 AI 生成需要在“API 接口设置”中填写有效接口和密钥。
 
 ## 功能
 
@@ -22,6 +22,7 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 - 本地加密 API 配置、项目持久化和迁移包
 - OpenAI-compatible 文本、图像、视觉和语音接口适配
 - Dispatch/Seedance 风格的视频任务接口适配
+- Wan 3.0 异步视频任务适配；本机 MCP 可让 Codex 读取画布和任务，并在费用授权后运行节点
 - 内置客户可查看的“API 报价”模块
 - 内置“购买 API / 联系我们”页面、官方微信二维码和接口设置购买入口
 
@@ -32,6 +33,7 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 3. 每项配置先“保存”，再点击对应的测试按钮读取模型。测试成功只代表接口目录可访问，第一次生成建议用 1～2 个镜头、低分辨率进行小额验收。
 4. “AI 一键成片”用于从剧本推进到分镜和成片；“创作画布”用于节点式组合；“视频重制”用于导入原片、拆镜、分析和逐镜头重做。
 5. 左侧“API 报价”可以查看当前视频模型参考价；“购买 API / 联系我们”可以放大或保存官方微信二维码。
+6. 如需用 Codex 控制画布，按[本机 MCP 连接说明](docs/Codex-MCP-连接.md)配置；没有 Codex 环境也可直接在软件界面操作。
 
 更完整的操作、断点恢复和错误处理见[完整中文使用手册](docs/完整使用手册.md)。
 
@@ -81,6 +83,8 @@ npm start
 - [视频重制本地化部署](docs/视频重制本地化部署.md)：安装包用户是否需要插件、源码构建所需 FFmpeg/FFprobe、可选 PySceneDetect 和验证方法
 - [视觉模型自动检测](docs/视觉模型自动检测使用说明.md)：视觉模型读取、实测与错误解释
 - [长视频视觉分析与断点恢复](docs/长视频视觉分析与断点恢复说明.md)：拆镜、抽帧、批次分析和恢复机制
+- [Codex 本机 MCP 连接](docs/Codex-MCP-连接.md)：安装路径、配置、工具权限和软件重启后的连接恢复
+- [1.1.9 更新说明](docs/CanvDoAI-Studio-1.1.9-更新说明.md)：本版修复、验证范围与已知边界
 - [内置工作流模板](docs/内置工作流模板-1.1.0.md)：各模板的节点、连线与适用场景
 - [发布验收标准](docs/发布验收标准.md)：哪些能力已自动验证，哪些必须使用真实供应商接口验收
 

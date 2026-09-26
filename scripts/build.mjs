@@ -5,7 +5,7 @@ await import('./generate-drama-routes.mjs');
 await import('./collect-licenses.mjs');
 await mkdir('build', { recursive: true });
 await viteBuild();
-for (const [source, output] of [['electron/main.ts','main.cjs'],['electron/preload.ts','preload.cjs'],['runtime/server.ts','server.cjs']]) {
+for (const [source, output] of [['electron/main.ts','main.cjs'],['electron/preload.ts','preload.cjs'],['runtime/server.ts','server.cjs'],['electron/mcp-stdio.ts','mcp-stdio.cjs']]) {
   await build({ entryPoints:[source], outfile:`build/${output}`, bundle:true, platform:'node', format:'cjs', target:'node22', external:['electron','./server.cjs'], sourcemap:true });
 }
 const mediaRuntime=await Promise.allSettled([access('vendor/ffmpeg/ffmpeg.exe'),access('vendor/ffmpeg/ffprobe.exe')]);

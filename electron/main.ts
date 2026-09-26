@@ -1,23 +1,44 @@
 import { app, BrowserWindow, ipcMain, safeStorage, session, dialog, shell } from 'electron';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { join, extname, basename } from 'node:path';
-import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, unlinkSync, appendFileSync } from 'node:fs';
 import { mkdir, cp, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
+import { createServer } from 'node:net';
+import { createHash } from 'node:crypto';
 import { DurableStore, atomicWrite } from './store';
 import { defaults, normalizeRemovedVideoProtocol, validateConfig, type DesktopConfig } from './config';
 import { installPlaybackPermissions } from './playback-permissions';
 import { VisionDiscovery } from './vision-discovery';
 import { diagnoseApiDirectories } from './api-diagnostics';
 import type { VisionAction } from '../src/desktop/vision-types';
+import {runMcpStdio} from './mcp-server';
 
 const smoke=process.argv.includes('--smoke-test');
+const mcpMode=process.argv.includes('--mcp');
+const mcpTrace=(event:string)=>{if(mcpMode){try{appendFileSync(join(app.getPath('userData'),'mcp-diagnostics.log'),`${new Date().toISOString()} ${event}\n`);}catch{}}};
+if(mcpMode)mcpTrace(`process-start argv=${JSON.stringify(process.argv.slice(1))} stdinTTY=${process.stdin.isTTY===true} stdinDestroyed=${process.stdin.destroyed}`);
 if(process.env.CANVDOAI_TEST_DATA)app.setPath('userData',process.env.CANVDOAI_TEST_DATA);
-if(!app.requestSingleInstanceLock()) app.quit();
+if(!mcpMode&&!app.requestSingleInstanceLock()) app.quit();
 let window:BrowserWindow|undefined;
-app.on('second-instance',()=>{window?.show();window?.focus();});
+let mcpBridgePath:string|undefined,mcpBridgeId:string|undefined;
+let mcpPipeServer:ReturnType<typeof createServer>|undefined;
+if(!mcpMode)app.on('second-instance',()=>{window?.show();window?.focus();});
 app.whenReady().then(async()=>{
+  mcpTrace('app-ready');
   const data=app.getPath('userData');mkdirSync(data,{recursive:true});
+  if(mcpMode){
+    const bridgePath=join(data,'mcp-bridge.encrypted');
+    if(!existsSync(bridgePath))throw Error('CanvDoAI 尚未运行，或本地 MCP 桥接尚未就绪。请先打开桌面软件，再重试。');
+    if(!safeStorage.isEncryptionAvailable())throw Error('Windows 本机密钥存储不可用，无法安全读取 MCP 会话。');
+    const bridge=JSON.parse(safeStorage.decryptString(Buffer.from(readFileSync(bridgePath,'utf8'),'base64')));
+    mcpTrace(`bridge-decrypted origin=${bridge.origin}`);
+    if(typeof bridge.origin!=='string'||!/^http:\/\/127\.0\.0\.1:\d+$/.test(bridge.origin)||typeof bridge.token!=='string'||bridge.token.length<32)throw Error('本地 MCP 会话信息无效；请重启 CanvDoAI 后重试。');
+    const response=await fetch(bridge.origin+'/api/studio/state',{headers:{'x-canvdoai-session':bridge.token},redirect:'error',signal:AbortSignal.timeout(5000)});
+    if(!response.ok)throw Error('无法连接正在运行的 CanvDoAI 工作室。请确认桌面软件仍保持打开。');
+    mcpTrace('studio-health-ok');
+    await runMcpStdio(bridge,mcpTrace);mcpTrace('stdio-returned');app.quit();return;
+  }
   const store=new DurableStore(data);
   const secretPath=join(data,'api-settings.encrypted');
   let config={...defaults};
@@ -40,6 +61,16 @@ app.whenReady().then(async()=>{
   const {startLocalServer}=require('./server.cjs');
   const token=randomBytes(32).toString('hex');
   const local=await startLocalServer({dataDir:data,rendererDir:join(app.getAppPath(),'dist'),token,config,legacyStore:store});
+  if(safeStorage.isEncryptionAvailable()){
+    mcpBridgePath=join(data,'mcp-bridge.encrypted');mcpBridgeId=randomUUID();
+    atomicWrite(mcpBridgePath,safeStorage.encryptString(JSON.stringify({id:mcpBridgeId,origin:local.origin,token})).toString('base64'));
+    const pipeSuffix=createHash('sha256').update(data.toLowerCase()).digest('hex').slice(0,24);
+    mcpPipeServer=createServer(socket=>{
+      let request='';socket.setEncoding('utf8');
+      socket.on('data',chunk=>{request+=chunk;if(!request.includes('\n'))return;socket.end(request.trim()==='GET'?JSON.stringify({origin:local.origin,token})+'\n':'{}\n');});
+    });
+    mcpPipeServer.listen(`\\\\.\\pipe\\canvdoai-mcp-${pipeSuffix}`);
+  }
   const runtimeSession=session.fromPartition('persist:canvdoai-desktop');
   installPlaybackPermissions(runtimeSession,local.origin,()=>window?.webContents);
   runtimeSession.webRequest.onBeforeSendHeaders({urls:[`${local.origin}/*`]},(details,callback)=>{
@@ -106,7 +137,13 @@ app.whenReady().then(async()=>{
   window.on('close',(event)=>{
     if(!smoke&&local.isBusy()){const choice=dialog.showMessageBoxSync(window!,{type:'warning',buttons:['继续等待','退出软件'],defaultId:0,cancelId:0,message:'生成任务仍在运行。退出不会撤销云端已提交的计费任务；已保存结果保留，下次需恢复查询。'});if(choice===0)event.preventDefault();}
   });
-  app.on('before-quit',()=>{vision.cancel();local.close();});
+  app.on('before-quit',()=>{
+    vision.cancel();local.close();mcpPipeServer?.close();
+    if(mcpBridgePath&&existsSync(mcpBridgePath))try{
+      const bridge=JSON.parse(safeStorage.decryptString(Buffer.from(readFileSync(mcpBridgePath,'utf8'),'base64')));
+      if(bridge.id===mcpBridgeId)unlinkSync(mcpBridgePath);
+    }catch{/* Keep an unreadable encrypted file rather than touching another session. */}
+  });
   await window.loadURL(local.origin+(process.argv.includes('--api-settings')&&!smoke?'/settings':'/remake'));
   if(smoke) {
     await new Promise<void>(resolve=>setTimeout(resolve,800));
@@ -116,5 +153,6 @@ app.whenReady().then(async()=>{
     await writeFile(join(data,'smoke-result.json'),JSON.stringify({...report,probe,encrypted:safeStorage.isEncryptionAvailable(),origin:local.origin},null,2));
     app.quit();
   } else window.show();
-}).catch(error=>{dialog.showErrorBox('CanvDoAI 启动失败',error instanceof Error?error.message:'未知错误');app.quit();});
-app.on('window-all-closed',()=>app.quit());
+}).catch(error=>{const message=error instanceof Error?error.message:'未知错误';mcpTrace(`startup-error ${message}`);if(mcpMode)process.stderr.write(`CanvDoAI MCP: ${message}\n`);else dialog.showErrorBox('CanvDoAI 启动失败',message);app.quit();});
+// MCP runs headlessly without a BrowserWindow; keep its stdio process alive until Codex closes stdin.
+if(!mcpMode)app.on('window-all-closed',()=>app.quit());

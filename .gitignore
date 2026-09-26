@@ -2,6 +2,8 @@ node_modules/
 dist/
 build/
 release*/
+/vendor/ffmpeg/
+/docs/validation/
 work/
 .local-generated-assets/
 .local-generated-media/

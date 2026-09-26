@@ -52,11 +52,61 @@ export function normalizeFuliuBalance(payload:any){
   // The handoff does not define the balance response fields. Preserve unknown rather than inventing numbers.
   return {remaining_points:typeof b?.available_points==='number'?b.available_points:typeof b?.balance==='number'?b.balance:typeof b?.remaining_points==='number'?b.remaining_points:null,quota_points:typeof b?.quota_points==='number'?b.quota_points:null,used_points:typeof b?.used_points==='number'?b.used_points:undefined,billing_source:'fuliu',raw_balance:b};
 }
+const WAN_TASK_PREFIX='/v1/wan-tasks/';
+export function normalizeWanJob(payload:any){
+  const output=payload?.output??{};
+  const status=String(output.task_status??payload?.status??'PENDING').toLowerCase();
+  return {
+    id:output.task_id??payload?.task_id??payload?.id,
+    status:status==='succeeded'?'succeeded':status==='failed'?'failed':status==='canceled'?'canceled':'processing',
+    result_url:output.video_url,
+    failure:output.message||output.code?{message:[output.code,output.message].filter(Boolean).join(': ')}:null,
+    raw:payload
+  };
+}
+export function wanCreateBody(input:any){
+  if(typeof input.model!=='string'||!input.model.startsWith('wan-3.0'))throw Error('不是 Wan 3.0 视频模型');
+  const parameters=input.parameters??{};
+  const assets=Array.isArray(input.assets)?input.assets:[];
+  const media=assets.map((asset:any)=>{
+    const url=asset.cdn_url??asset.url;
+    if(typeof url!=='string'||!url.trim())throw Error('Wan 参考素材缺少可访问地址');
+    const type=asset.role==='first_frame'?'first_frame':asset.role==='last_frame'?'last_frame':asset.kind==='image'?'reference_image':asset.kind==='video'?'reference_video':'reference_audio';
+    return {type,url};
+  });
+  return {
+    model:input.model.includes('prime')?'wan3.0-video-prime':'wan3.0-video',
+    input:{prompt:input.prompt,...(media.length?{media}:{})},
+    parameters:{
+      resolution:String(parameters.resolution??'480p').toUpperCase(),
+      ratio:parameters.aspect_ratio==='auto'?'adaptive':(parameters.aspect_ratio??'adaptive'),
+      duration:parameters.duration_seconds,
+      audio:parameters.generate_audio===true,
+      prompt_extend:true,
+      watermark:false
+    }
+  };
+}
 export async function videoGatewayFetch(config:Record<string,string>,path:string,init:RequestInit={},fetcher:typeof fetch=fetch):Promise<Response>{
   const fuliu=config.videoProtocol==='fuliu';
   let base=config.videoBase.replace(/\/+$/,''),key=config.videoKey,route=path,body=init.body;
   const headers=new Headers(init.headers);headers.delete('authorization');
   let map:((value:any)=>any)|undefined;
+  if(!fuliu&&path==='/v1/video-jobs'&&(init.method??'GET').toUpperCase()==='POST'){
+    const input=JSON.parse(String(init.body??'{}'));
+    if(typeof input.model==='string'&&input.model.startsWith('wan-3.0')){
+      route='/api/v1/services/aigc/video-generation/video-synthesis';
+      headers.set('X-DashScope-Async','enable');
+      headers.set('content-type','application/json');
+      body=JSON.stringify(wanCreateBody(input));
+      map=normalizeWanJob;
+    }
+  }else if(!fuliu&&path.startsWith(WAN_TASK_PREFIX)){
+    const id=path.slice(WAN_TASK_PREFIX.length);
+    if(!id||id.includes('/'))throw Error('Wan 任务 ID 无效');
+    route='/api/v1/tasks/'+id;
+    map=normalizeWanJob;
+  }
   if(fuliu){
     if(!base.endsWith('/v1'))base+='/v1';
     if(path==='/v1/models')route='/models';
