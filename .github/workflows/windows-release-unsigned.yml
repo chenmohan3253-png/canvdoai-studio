@@ -3,8 +3,6 @@ name: Build unsigned Windows installer
 on:
   workflow_dispatch:
   push:
-    branches:
-      - "release-debug/**"
     tags:
       - "v*"
 

@@ -6,9 +6,9 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 
 ## Windows 安装包直接下载
 
-- [下载 CanvDoAI Studio 1.1.9 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.9/CanvDoAI-Studio-1.1.9-Setup.exe)
-- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.9/CanvDoAI-Studio-1.1.9-Setup-SHA256.txt)
-- [查看 1.1.9 发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.9)
+- [下载 CanvDoAI Studio 1.1.10 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.10/CanvDoAI-Studio-1.1.10-Setup.exe)
+- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.10/CanvDoAI-Studio-1.1.10-Setup-SHA256.txt)
+- [查看 1.1.10 发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.10)
 
 安装包适用于 Windows 10/11 x64，已经内置 FFmpeg/FFprobe 和本机 MCP 所需运行时，不需要另外安装 Node.js、Python 或本地大模型。当前安装包尚未进行企业代码签名，Windows SmartScreen 可能显示“未知发布者”；请确认下载来源为本仓库并核对同一 Release 页面提供的 SHA-256。软件安装后可直接打开，但 AI 生成需要在“API 接口设置”中填写有效接口和密钥。
 
@@ -84,7 +84,7 @@ npm start
 - [视觉模型自动检测](docs/视觉模型自动检测使用说明.md)：视觉模型读取、实测与错误解释
 - [长视频视觉分析与断点恢复](docs/长视频视觉分析与断点恢复说明.md)：拆镜、抽帧、批次分析和恢复机制
 - [Codex 本机 MCP 连接](docs/Codex-MCP-连接.md)：安装路径、配置、工具权限和软件重启后的连接恢复
-- [1.1.9 更新说明](docs/CanvDoAI-Studio-1.1.9-更新说明.md)：本版修复、验证范围与已知边界
+- [1.1.10 更新说明](docs/CanvDoAI-Studio-1.1.10-更新说明.md)：本版修复、验证范围与已知边界
 - [内置工作流模板](docs/内置工作流模板-1.1.0.md)：各模板的节点、连线与适用场景
 - [发布验收标准](docs/发布验收标准.md)：哪些能力已自动验证，哪些必须使用真实供应商接口验收
 
