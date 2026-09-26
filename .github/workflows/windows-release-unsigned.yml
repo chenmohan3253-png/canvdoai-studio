@@ -64,10 +64,9 @@ jobs:
           npm run package 2>&1 | Tee-Object -FilePath package-build.log
           $packageExitCode = $LASTEXITCODE
           if ($packageExitCode -ne 0) {
-            Get-Content package-build.log -Tail 35 | ForEach-Object {
-              $line = $_ -replace '\r|\n', ' '
-              Write-Host "::error::$line"
-            }
+            $tail = (Get-Content package-build.log -Tail 100) -join "`n"
+            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Windows package failure::$escaped"
             exit $packageExitCode
           }
 
