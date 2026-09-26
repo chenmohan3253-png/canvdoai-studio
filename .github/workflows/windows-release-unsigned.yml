@@ -3,6 +3,8 @@ name: Build unsigned Windows installer
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "release-debug/**"
     tags:
       - "v*"
 
@@ -57,7 +59,17 @@ jobs:
           npm test
 
       - name: Package unsigned installer
-        run: npm run package
+        shell: pwsh
+        run: |
+          npm run package 2>&1 | Tee-Object -FilePath package-build.log
+          $packageExitCode = $LASTEXITCODE
+          if ($packageExitCode -ne 0) {
+            Get-Content package-build.log -Tail 35 | ForEach-Object {
+              $line = $_ -replace '\r|\n', ' '
+              Write-Host "::error::$line"
+            }
+            exit $packageExitCode
+          }
 
       - name: Verify MCP reconnect after desktop restart
         run: npm run test:mcp
