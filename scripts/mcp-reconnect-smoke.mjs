@@ -15,13 +15,28 @@ let currentOrigin = '';
 let child;
 
 async function startStudio(label) {
-  const server = createHttpServer((request, response) => {
+  const projects = [], canvases = [{id:label,name:label,nodes:[]}];
+  const server = createHttpServer(async (request, response) => {
     if (request.headers['x-canvdoai-session'] !== token) {
       response.writeHead(401).end();
       return;
     }
+    const url = new URL(request.url, 'http://localhost');
+    let value;
+    if (request.method === 'POST') {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const input = JSON.parse(Buffer.concat(chunks).toString());
+      if (url.pathname === '/api/studio/project') {
+        value = {id:`project-${label}`,name:input.name};projects.push(value);
+      } else if (url.pathname === '/api/studio/canvas/create') {
+        value = {id:`canvas-${label}`,name:input.name,projectId:input.projectId,nodes:[],revision:1};canvases.push(value);
+      }
+    }
+    if (url.pathname === '/api/studio/state') value = {projects,canvases:canvases.filter(canvas=>!url.searchParams.has('projectId')||canvas.projectId===url.searchParams.get('projectId')),tasks:[]};
+    if (!value) { response.writeHead(404).end();return; }
     response.writeHead(200, {'content-type':'application/json'});
-    response.end(JSON.stringify({canvases:[{id:label,name:label,nodes:[]}],tasks:[]}));
+    response.end(JSON.stringify(value));
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -77,11 +92,18 @@ try {
   const initialized = await request(1,'initialize',{protocolVersion:'2025-03-26'});
   if (initialized.error) throw new Error(JSON.stringify(initialized.error));
   const tools = await request(2,'tools/list');
-  if (!tools.result?.tools?.some(tool => tool.name === 'list_canvases')) throw new Error('MCP tools unavailable');
+  for (const name of ['list_canvases','list_projects','create_project','create_canvas']) if (!tools.result?.tools?.some(tool => tool.name === name)) throw new Error(`MCP tool unavailable: ${name}`);
 
   const first = await request(3,'tools/call',{name:'list_canvases',arguments:{}});
   const firstName = JSON.parse(first.result?.content?.[0]?.text ?? '{}').canvases?.[0]?.name;
   if (firstName !== 'before-restart') throw new Error(`First session failed: ${firstName}`);
+  const createdProject = await request(5,'tools/call',{name:'create_project',arguments:{name:'隔离测试项目'}});
+  const projectId = JSON.parse(createdProject.result?.content?.[0]?.text ?? '{}').project?.id;
+  if (projectId !== 'project-before-restart') throw new Error('MCP project creation failed');
+  const createdCanvas = await request(6,'tools/call',{name:'create_canvas',arguments:{projectId,name:'项目内画布',templateId:'blank'}});
+  if (JSON.parse(createdCanvas.result?.content?.[0]?.text ?? '{}').canvas?.projectId !== projectId) throw new Error('MCP project-scoped canvas creation failed');
+  const projectCanvases = await request(7,'tools/call',{name:'list_canvases',arguments:{projectId}});
+  if (JSON.parse(projectCanvases.result?.content?.[0]?.text ?? '{}').canvases?.length !== 1) throw new Error('MCP project filter failed');
 
   currentOrigin = await startStudio('after-restart');
   const second = await request(4,'tools/call',{name:'list_canvases',arguments:{}});

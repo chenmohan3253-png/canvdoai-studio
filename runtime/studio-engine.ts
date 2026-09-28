@@ -131,7 +131,7 @@ export class StudioEngine {
   run(canvasId:string,nodeId:string|undefined,force:boolean,requestId:string){
     const previous=this.store.get<CanvasTask>('canvas-task',requestId);if(previous){if(previous.canvasId!==canvasId)throw Error('请求ID已被其他画布使用');if(previous.state==='PAUSED')this.launch(previous,nodeId,force);return previous;}
     if(this.store.list<CanvasTask>('canvas-task').some(t=>t.canvasId===canvasId&&['QUEUED','RUNNING'].includes(t.state)))throw Error('此画布已有任务运行中，请勿重复提交');
-    const doc=this.store.get<CanvasDocument>('canvas',canvasId);if(!doc)throw Error('画布不存在');const invalid=validateGraph(doc,this.store.assets());if(invalid)throw Error(invalid);
+    const doc=this.store.get<CanvasDocument>('canvas',canvasId);if(!doc)throw Error('画布不存在');const invalid=validateGraph(doc,this.store.assets());if(invalid)throw Error(invalid);this.store.assertProjectAssets(doc);
     if(nodeId&&!doc.nodes.some(n=>n.id===nodeId))throw Error('节点不存在');
     const task:CanvasTask={id:requestId,canvasId,nodeId,state:'QUEUED',message:'已持久化，等待执行',completed:0,total:doc.nodes.length,createdAt:now()};
     this.store.put('canvas-task',task.id,task);this.launch(task,nodeId,force);return task;

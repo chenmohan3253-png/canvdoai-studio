@@ -4,7 +4,7 @@ import {newNode,type StudioAsset,type CanvasDocument} from './canvas-model';
 import {studioApi,downloadStudio,type StudioState} from './studio-client';
 import './canvas.css';
 export function AssetLibrary(){
-  const [state,setState]=useState<StudioState>({assets:[],canvases:[],tasks:[]}),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[filter,setFilter]=useState(''),[kind,setKind]=useState('all');const navigate=useNavigate();
+  const [state,setState]=useState<StudioState>({projects:[],assets:[],canvases:[],tasks:[]}),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[filter,setFilter]=useState(''),[kind,setKind]=useState('all');const navigate=useNavigate();
   const refresh=()=>studioApi<StudioState>('/state').then(setState);
   useEffect(()=>{refresh().catch(e=>setNotice(e.message));},[]);
   async function sync(){setBusy(true);try{const result=await studioApi('/sync-assets',{});await refresh();setNotice(`已归档 ${result.count} 项。${result.errors.length?result.errors.join('；'):'图片与视频均保留本机副本。'}`);}catch(e){setNotice((e as Error).message);}finally{setBusy(false);}}

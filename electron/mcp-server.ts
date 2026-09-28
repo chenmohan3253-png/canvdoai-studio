@@ -6,7 +6,10 @@ type BridgeSource=Bridge|(()=>Promise<Bridge>);
 type RpcRequest={jsonrpc?:string;id?:string|number|null;method?:string;params?:any};
 
 const tools=[
-  {name:'list_canvases',description:'列出本机 CanvDoAI 画布与最近任务摘要；不返回 API 密钥。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
+  {name:'list_projects',description:'列出本机创作画布项目及各项目画布数量；不返回 API 密钥。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
+  {name:'create_project',description:'新建独立的本机创作项目。不会调用生成 API，不消耗额度；同名项目会拒绝。',inputSchema:{type:'object',properties:{name:{type:'string',description:'项目名称，1–80 字符'}},required:['name'],additionalProperties:false}},
+  {name:'create_canvas',description:'在指定项目中新建工作流画布；不会运行节点或消耗生成 API 额度。',inputSchema:{type:'object',properties:{projectId:{type:'string'},name:{type:'string'},templateId:{type:'string',enum:['blank','professional-drama','quick-video','novel-comic','marketing-avatar','video-remake']}},required:['projectId','name','templateId'],additionalProperties:false}},
+  {name:'list_canvases',description:'列出本机 CanvDoAI 画布与最近任务摘要；可限定项目，不返回 API 密钥。',inputSchema:{type:'object',properties:{projectId:{type:'string',description:'可选，仅列出此项目的画布'}},additionalProperties:false}},
   {name:'get_canvas',description:'查看指定画布的节点、连线、提示词和选中版本；不返回 API 密钥。',inputSchema:{type:'object',properties:{canvasId:{type:'string'}},required:['canvasId'],additionalProperties:false}},
   {name:'get_task_status',description:'读取最近画布任务的运行状态、进度和失败原因。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},taskId:{type:'string'}},additionalProperties:false}},
   {name:'run_canvas_node',description:'运行画布节点及其必要上游。这会调用已配置的生成 API 并可能产生费用；只有在用户明确要求并确认本次 API 消耗后才能调用。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},nodeId:{type:'string',description:'不填则运行整张画布'},force:{type:'boolean',description:'强制重新生成目标节点，可能再次计费，默认 false'},confirmCost:{type:'boolean',const:true,description:'必须由用户明确确认本次可能产生的 API 费用后设为 true'}},required:['canvasId','confirmCost'],additionalProperties:false}}
@@ -32,8 +35,21 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
   };
   const content=(value:unknown)=>({content:[{type:'text',text:JSON.stringify(value,null,2)}]});
   const callTool=async(name:string,args:any)=>{
-    if(name==='list_canvases'){
+    if(name==='list_projects'){
       const state=await api('/api/studio/state');
+      return content({projects:(state.projects||[]).map((project:any)=>({...project,canvasCount:(state.canvases||[]).filter((canvas:any)=>canvas.projectId===project.id).length}))});
+    }
+    if(name==='create_project'){
+      if(typeof args?.name!=='string'||!args.name.trim())throw Error('name 为必填项');
+      return content({project:await api('/api/studio/project',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:args.name})})});
+    }
+    if(name==='create_canvas'){
+      if(typeof args?.projectId!=='string'||!args.projectId||typeof args?.name!=='string'||!args.name.trim()||typeof args?.templateId!=='string')throw Error('projectId、name、templateId 均为必填项');
+      const canvas=await api('/api/studio/canvas/create',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectId:args.projectId,name:args.name,templateId:args.templateId})});
+      return content({canvas:{id:canvas.id,name:canvas.name,projectId:canvas.projectId,revision:canvas.revision,nodeCount:canvas.nodes?.length||0}});
+    }
+    if(name==='list_canvases'){
+      const state=await api('/api/studio/state'+(args?.projectId?'?projectId='+encodeURIComponent(args.projectId):''));
       return content({canvases:(state.canvases||[]).map((canvas:any)=>({id:canvas.id,name:canvas.name,projectId:canvas.projectId,revision:canvas.revision,updatedAt:canvas.updatedAt,nodes:(canvas.nodes||[]).map((node:any)=>({id:node.id,label:node.data?.label,kind:node.data?.kind,model:node.data?.model||undefined,hasPrompt:!!node.data?.prompt,selectedVersion:node.data?.selectedVersion||undefined}))})),recentTasks:(state.tasks||[]).slice(0,30).map((task:any)=>({id:task.id,canvasId:task.canvasId,state:task.state,message:task.message,completed:task.completed,total:task.total,createdAt:task.createdAt}))});
     }
     if(name==='get_canvas'){
@@ -65,7 +81,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       try{
         switch(request.method){
           case 'initialize':
-            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.9'}});return;
+            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.11'}});return;
           case 'notifications/initialized':
           case 'notifications/cancelled': return;
           case 'ping': result(id,{});return;

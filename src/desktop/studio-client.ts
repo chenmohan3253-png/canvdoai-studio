@@ -1,5 +1,5 @@
-import type {CanvasDocument,CanvasTask,StudioAsset} from './canvas-model';
-export interface StudioState {canvases:CanvasDocument[];assets:StudioAsset[];tasks:CanvasTask[];}
+import type {CanvasDocument,CanvasTask,StudioAsset,StudioProject} from './canvas-model';
+export interface StudioState {projects:StudioProject[];canvases:CanvasDocument[];assets:StudioAsset[];tasks:CanvasTask[];}
 export async function studioApi<T=any>(path:string,body?:unknown):Promise<T>{
   const response=await fetch('/api/studio'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
   const data=await response.json();if(!response.ok)throw Error(data.message||'本机服务不可用');return data;

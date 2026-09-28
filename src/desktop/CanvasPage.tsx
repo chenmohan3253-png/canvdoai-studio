@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
-import {useNavigate,useParams} from 'react-router-dom';
+import {useNavigate,useParams,useSearchParams} from 'react-router-dom';
 import {ReactFlow,Background,Controls,MiniMap,Handle,Position,applyNodeChanges,applyEdgeChanges,type NodeProps,type Node,type Connection} from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {newNode,NODE_KINDS,NODE_LABELS,validateGraph,arrangeGraph,withoutDanglingEdges,executionNodeIds,type CanvasDocument,type CanvasNode,type StudioAsset,type NodeKind} from './canvas-model';
@@ -10,7 +10,7 @@ import {canvasNodeStatuses,type CanvasNodeStatus} from './canvas-node-status';
 import {CanvasNodeFooter} from './CanvasNodeFooter';
 import {StudioImagePreview} from './StudioImagePreview';
 import {compactVideoPromptSafely,splitVideoPrompt,videoPromptUsage,VIDEO_PROMPT_SUFFIX} from './video-prompt-tools';
-import {createWorkflowDocument,WORKFLOW_TEMPLATES,type WorkflowTemplateId} from './workflow-templates';
+import {WORKFLOW_TEMPLATES,type WorkflowTemplateId} from './workflow-templates';
 import './canvas.css';
 
 function NodeCard({data,selected}:NodeProps<Node<CanvasNode['data']&{preview?:StudioAsset;taskStatus?:CanvasNodeStatus}>>){
@@ -25,7 +25,7 @@ function NodeCard({data,selected}:NodeProps<Node<CanvasNode['data']&{preview?:St
   </div>;
 }
 const nodeTypes={studio:NodeCard};
-const emptyState:StudioState={canvases:[],assets:[],tasks:[]};
+const emptyState:StudioState={projects:[],canvases:[],assets:[],tasks:[]};
 const viewportChanged=(before:CanvasDocument['viewport'],after:CanvasDocument['viewport'])=>
   !!after&&(!before||Math.abs(before.x-after.x)>.01||Math.abs(before.y-after.y)>.01||Math.abs(before.zoom-after.zoom)>.0001);
 function knownPromptInputs(doc:CanvasDocument,nodeId:string,assets:StudioAsset[]){
@@ -39,11 +39,12 @@ function knownPromptInputs(doc:CanvasDocument,nodeId:string,assets:StudioAsset[]
 }
 function knownReferenceCount(doc:CanvasDocument,nodeId:string){return doc.edges.filter(edge=>edge.target===nodeId&&(edge.targetHandle||'prompt')!=='prompt').length;}
 export function CanvasPage(){
-  const {canvasId}=useParams(),navigate=useNavigate();
+  const {canvasId}=useParams(),navigate=useNavigate(),[searchParams,setSearchParams]=useSearchParams();
   const [state,setState]=useState<StudioState>(emptyState),[doc,setDoc]=useState<CanvasDocument>(),[notice,setNotice]=useState(''),[selected,setSelected]=useState<string>(),[busy,setBusy]=useState(false),[dirty,setDirty]=useState(false),[saveError,setSaveError]=useState(''),[submitting,setSubmitting]=useState<{nodeId?:string;phase:'saving'|'submitting'}>();
   const catalog=useVideoCatalog(),models=catalog.session;
   const current=useRef(doc),serial=useRef(0),saved=useRef(0),saving=useRef<Promise<void>>(),past=useRef<CanvasDocument[]>([]),future=useRef<CanvasDocument[]>([]),[historyTick,setHistoryTick]=useState(0);
-  const [projectId,setProjectId]=useState('local'),[name,setName]=useState('新画布'),[sourceAssetId,setSourceAssetId]=useState(''),[templateId,setTemplateId]=useState<WorkflowTemplateId>('professional-drama');
+  const [newProjectName,setNewProjectName]=useState(''),[name,setName]=useState('新画布'),[sourceAssetId,setSourceAssetId]=useState(''),[templateId,setTemplateId]=useState<WorkflowTemplateId>('professional-drama');
+  const projectId=searchParams.get('projectId')||'',currentProject=state.projects?.find(project=>project.id===projectId);
   const file=useRef<HTMLInputElement>(null);
   const active=state.tasks.find(t=>t.canvasId===canvasId&&['QUEUED','RUNNING'].includes(t.state));const locked=busy||!!active;
   const refresh=useCallback(async()=>{const next=await studioApi<StudioState>('/state');setState(next);if(canvasId&&serial.current===saved.current&&!saving.current){const nextDoc=next.canvases.find(d=>d.id===canvasId);current.current=nextDoc;setDoc(nextDoc);}return next;},[canvasId]);
@@ -63,15 +64,19 @@ export function CanvasPage(){
   function edit(next:CanvasDocument,record=true){if(locked)return;if(record&&current.current){past.current=[...past.current.slice(-49),structuredClone(current.current)];future.current=[];}current.current=next;serial.current++;setDoc(next);setDirty(true);setSaveError('');setHistoryTick(v=>v+1);}
   function changeNode(fields:Partial<CanvasNode['data']>){if(!doc||!selected)return;edit({...doc,nodes:doc.nodes.map(n=>n.id===selected?{...n,data:{...n.data,...fields}}:n)});}
   async function create(){
-    const id=crypto.randomUUID(),model=models?.models?.[0];
-    const value=createWorkflowDocument({
-      id,
+    if(!currentProject)throw Error('请先新建或选择项目');
+    const model=models?.models?.[0];
+    const result=await studioApi<CanvasDocument>('/canvas/create',{
       name:name.trim()||WORKFLOW_TEMPLATES.find(item=>item.id===templateId)?.name||'新画布',
-      projectId:projectId.trim()||`canvas-${id}`,
+      projectId:currentProject.id,
       templateId,
       preferredVideoModel:model?{id:model.id,resolution:model.resolutions[0],aspectRatio:model.aspectRatios.find(value=>value==='9:16')||model.aspectRatios[0],duration:model.durationMin}:undefined,
     });
-    const result=await studioApi<CanvasDocument>('/canvas',value);navigate('/canvas/'+result.id);
+    navigate('/canvas/'+result.id);
+  }
+  async function createProject(){
+    const project=await studioApi<{id:string;name:string}>('/project',{name:newProjectName});
+    setNewProjectName('');setSearchParams({projectId:project.id});await refresh();setNotice(`项目“${project.name}”已创建；请选择工作流新建画布。`);
   }
   function add(kind:NodeKind){if(!doc)return;const node=newNode(kind,doc.nodes.length%8);edit({...doc,nodes:[...doc.nodes,node]});setSelected(node.id);}
   function connect(connection:Connection){if(!doc)return;const next={...doc,edges:[...doc.edges,{...connection,id:crypto.randomUUID()}]};const error=validateGraph(next,state.assets);if(error)setNotice(error);else edit(next);}
@@ -91,7 +96,7 @@ export function CanvasPage(){
     if(!confirm(force?'本次会创建新的候选版本，可能消耗API额度。确认重新生成？':'将运行缺失或输入变化的节点，可能消耗API额度；已完成且输入未变的结果会复用。继续？'))return;
     setBusy(true);setSubmitting({nodeId,phase:'saving'});setNotice('正在保存当前参数…');try{await save();if(serial.current!==saved.current)throw Error('当前修改尚未保存，请重新点击运行');const canvas=current.current;if(!canvas)throw Error('画布不存在');setSubmitting({nodeId,phase:'submitting'});setNotice('参数已保存，正在创建生成任务…');const task=await studioApi<StudioState['tasks'][number]>('/run',{canvasId:canvas.id,nodeId,force,requestId:crypto.randomUUID(),confirmCost:true});setState(value=>({...value,tasks:[task,...value.tasks.filter(item=>item.id!==task.id)]}));setNotice('任务已持久化，正在生成；可以离开此页，返回后继续查看进度。');setSubmitting(undefined);await refresh();}catch(e){setNotice((e as Error).message);}finally{setSubmitting(undefined);setBusy(false);}
   }
-  async function importMedia(){try{const media=await window.desktop?.importMedia();if(!media){if(!window.desktop)setNotice('本机导入请在桌面安装版使用；浏览器预览不开放文件系统权限');return;}const asset=await studioApi<StudioAsset>('/asset',{...media,projectId:doc?.projectId||'local'});await refresh();if(selected)changeNode({assetId:asset.id,origin:asset.origin});}catch(e){setNotice((e as Error).message);}}
+  async function importMedia(){try{const media=await window.desktop?.importMedia();if(!media){if(!window.desktop)setNotice('本机导入请在桌面安装版使用；浏览器预览不开放文件系统权限');return;}if(!doc)throw Error('请先打开画布');const asset=await studioApi<StudioAsset>('/asset',{...media,projectId:doc.projectId});await refresh();if(selected)changeNode({assetId:asset.id,origin:asset.origin});}catch(e){setNotice((e as Error).message);}}
   const node=doc?.nodes.find(n=>n.id===selected),chosen=node?.data.versions.find(v=>v.id===node.data.selectedVersion),asset=state.assets.find(a=>a.id===(chosen?.assetId||node?.data.assetId));
   const videoModel=models?.models?.find(m=>m.id===node?.data.model);
   const promptInputs=node&&doc?knownPromptInputs(doc,node.id,state.assets):[];
@@ -127,12 +132,19 @@ export function CanvasPage(){
     edit(next);setSelected(splitNodes[0].id);
     setNotice(`已无损拆成 ${chunks.length} 个视频节点，原提示词内容全部保留。点击“继续运行流程”可依次生成；每段都可单独确认和重新生成。${outgoingCount?' 原下游仍连接第1段，最终请进入时间线统一合成。':''}`);
   }
-  if(!canvasId)return <section className="desk-page"><h1>创作画布</h1><p>选择工作流后自动创建正确的节点和连线；模板创建不调用API、不产生费用，运行前仍可逐项修改。</p><div className="workflow-template-grid">{WORKFLOW_TEMPLATES.map(template=><button type="button" key={template.id} className={templateId===template.id?'selected':''} aria-pressed={templateId===template.id} onClick={()=>{setTemplateId(template.id);if(name==='新画布'||WORKFLOW_TEMPLATES.some(item=>item.name===name))setName(template.name);}}><span>{template.badge}</span><strong>{template.name}</strong><p>{template.description}</p><small>{template.steps.join(' → ')}</small></button>)}</div><div className="canvas-create"><input aria-label="画布名称" value={name} onChange={e=>setName(e.target.value)}/><input aria-label="关联项目ID" value={projectId} onChange={e=>setProjectId(e.target.value)} placeholder="关联一键成片项目ID"/><button className="primary" onClick={()=>create().catch(e=>setNotice(e.message))}>按所选工作流创建</button><button onClick={()=>file.current?.click()}>导入迁移包</button></div><input ref={file} type="file" accept=".zip" hidden onChange={e=>importPackage(e.target.files?.[0])}/><div role="status">{notice}</div><h2 className="canvas-list-title">本机画布</h2><div className="canvas-catalog">{state.canvases.map(c=><button key={c.id} onClick={()=>navigate('/canvas/'+c.id)}><strong>{c.name}</strong><small>{c.nodes.length}节点 · {c.projectId}</small></button>)}</div></section>;
+  if(!canvasId)return <section className="desk-page">
+    <h1>创作画布 · 项目</h1><p>每个项目有独立的画布与素材。新建画布前请先选择项目；创建项目和模板不调用生成 API。</p>
+    <div className="canvas-create"><input aria-label="新项目名称" value={newProjectName} onChange={e=>setNewProjectName(e.target.value)} placeholder="输入新项目名称" onKeyDown={e=>{if(e.key==='Enter')createProject().catch(error=>setNotice(error.message));}}/><button className="primary" disabled={!newProjectName.trim()} onClick={()=>createProject().catch(error=>setNotice(error.message))}>新建项目</button><button onClick={()=>file.current?.click()}>导入迁移包</button></div>
+    <input ref={file} type="file" accept=".zip" hidden onChange={e=>importPackage(e.target.files?.[0])}/>
+    <div className="canvas-catalog">{(state.projects||[]).map(project=><button key={project.id} aria-pressed={project.id===projectId} style={project.id===projectId?{borderColor:'#9c82ff',background:'#201d3c'}:undefined} onClick={()=>setSearchParams({projectId:project.id})}><strong>{project.name}</strong><small>{state.canvases.filter(canvas=>canvas.projectId===project.id).length} 张画布{project.legacy?' · 旧项目':''}</small></button>)}</div>
+    <div role="status">{notice}</div>
+    {currentProject&&<><h2>{currentProject.name} · 新建画布</h2><div className="workflow-template-grid">{WORKFLOW_TEMPLATES.map(template=><button type="button" key={template.id} className={templateId===template.id?'selected':''} aria-pressed={templateId===template.id} onClick={()=>{setTemplateId(template.id);if(name==='新画布'||WORKFLOW_TEMPLATES.some(item=>item.name===name))setName(template.name);}}><span>{template.badge}</span><strong>{template.name}</strong><p>{template.description}</p><small>{template.steps.join(' → ')}</small></button>)}</div><div className="canvas-create"><input aria-label="画布名称" value={name} onChange={e=>setName(e.target.value)}/><button className="primary" onClick={()=>create().catch(error=>setNotice(error.message))}>在此项目创建画布</button></div><h2 className="canvas-list-title">本项目画布</h2><div className="canvas-catalog">{state.canvases.filter(canvas=>canvas.projectId===projectId).map(canvas=><button key={canvas.id} onClick={()=>navigate('/canvas/'+canvas.id)}><strong>{canvas.name}</strong><small>{canvas.nodes.length} 节点 · {canvas.updatedAt||'刚创建'}</small></button>)}</div></>}
+  </section>;
   if(!doc)return <section className="desk-page"><p>{notice||'正在加载画布…'}</p><button onClick={()=>navigate('/canvas')}>返回画布列表</button></section>;
   const nodeStatuses=canvasNodeStatuses(doc,state.tasks);
   if(submitting?.nodeId)nodeStatuses.set(submitting.nodeId,{label:submitting.phase==='saving'?'正在保存参数':'正在提交任务',tone:'running'});
   return <section className="canvas-page">
-    <header className="canvas-heading"><div><small>CANVDOAI / FLOW STUDIO</small><h1>{doc.name}</h1><span className={saveError?'save-failed':''}>项目 {doc.projectId} · {saveError?`保存失败：${saveError}`:dirty?'正在保存修改…':'已保存到本机'}</span></div><div><button disabled={locked} onClick={async()=>{await save();navigate('/canvas');}}>画布列表</button><button disabled={locked} onClick={()=>save().catch(e=>setNotice(e.message))}>保存</button><button disabled={locked} onClick={async()=>{try{await save();await downloadStudio('/api/studio/export/'+doc.id,doc.name+'.zip');}catch(e){setNotice((e as Error).message);}}}>导出含素材迁移包</button><button className="primary" disabled={locked||!doc.nodes.length||!!missingVideoModel} title={missingVideoModel?'请先刷新目录，并为视频节点选择可用模型':undefined} onClick={()=>run()}>继续运行流程</button></div></header>
+    <header className="canvas-heading"><div><small>CANVDOAI / FLOW STUDIO</small><h1>{doc.name}</h1><span className={saveError?'save-failed':''}>项目 {state.projects?.find(project=>project.id===doc.projectId)?.name||doc.projectId} · {saveError?`保存失败：${saveError}`:dirty?'正在保存修改…':'已保存到本机'}</span></div><div><button disabled={locked} onClick={async()=>{await save();navigate('/canvas?projectId='+encodeURIComponent(doc.projectId));}}>画布列表</button><button disabled={locked} onClick={()=>save().catch(e=>setNotice(e.message))}>保存</button><button disabled={locked} onClick={async()=>{try{await save();await downloadStudio('/api/studio/export/'+doc.id,doc.name+'.zip');}catch(e){setNotice((e as Error).message);}}}>导出含素材迁移包</button><button className="primary" disabled={locked||!doc.nodes.length||!!missingVideoModel} title={missingVideoModel?'请先刷新目录，并为视频节点选择可用模型':undefined} onClick={()=>run()}>继续运行流程</button></div></header>
     <div className="canvas-tools">{NODE_KINDS.map(kind=><button disabled={locked} key={kind} onClick={()=>add(kind)}>＋{NODE_LABELS[kind]}</button>)}<button disabled={locked||!past.current.length} onClick={()=>undo()}>撤销</button><button disabled={locked||!future.current.length} onClick={()=>undo(true)}>重做</button><button disabled={locked||!selected} onClick={duplicate}>复制选中</button><button disabled={locked} onClick={()=>{try{edit(arrangeGraph(doc));}catch(e){setNotice((e as Error).message);}}}>自动整理</button></div>
     <div className="canvas-status" role="status">{active?`${active.message} · ${active.completed}/${active.total}`:notice||'拖动连线建立流程；Shift框选，Delete删除，滚轮缩放。原生声音随视频生成。'}</div>
     <div className="canvas-layout"><div className="flow-surface"><ReactFlow nodes={doc.nodes.map(n=>({...n,selected:n.id===selected,data:{...n.data,taskStatus:nodeStatuses.get(n.id),preview:state.assets.find(a=>a.id===(n.data.versions.find(v=>v.id===n.data.selectedVersion)?.assetId||n.data.assetId))}}))} edges={doc.edges} nodeTypes={nodeTypes} onNodesChange={changes=>{if(locked)return;const persistent=changes.filter(c=>c.type!=='select'&&c.type!=='dimensions');if(persistent.length){const nodes=applyNodeChanges(persistent,doc.nodes) as CanvasNode[];edit(withoutDanglingEdges({...doc,nodes}));}}} onEdgesChange={changes=>{if(locked)return;const persistent=changes.filter(c=>c.type!=='select');if(persistent.length)edit({...doc,edges:applyEdgeChanges(persistent,doc.edges)});}} onConnect={connect} onNodeClick={(_,n)=>setSelected(n.id)} onPaneClick={()=>setSelected(undefined)} nodesDraggable={!locked} nodesConnectable={!locked} deleteKeyCode={locked?null:['Backspace','Delete']} fitView minZoom={0.15} maxZoom={2} colorMode="dark" onMoveEnd={(_,viewport)=>{const value=current.current;if(!locked&&value&&viewportChanged(value.viewport,viewport))edit({...value,viewport},false);}} defaultViewport={doc.viewport}><Background gap={24}/><Controls/><MiniMap pannable zoomable/></ReactFlow></div>
@@ -140,7 +152,7 @@ export function CanvasPage(){
       <label>名称<input value={node.data.label} disabled={locked} onChange={e=>changeNode({label:e.target.value})}/></label>
       {!['imageInput','output'].includes(node.data.kind)&&<label>{node.data.kind==='textInput'?'文本内容':'提示词 / 运镜 / 必说台词'}<textarea rows={6} disabled={locked} value={node.data.prompt} onChange={e=>changeNode({prompt:e.target.value})}/></label>}
       {node.data.kind==='videoGenerate'&&videoUsage&&<div className={`prompt-budget ${videoUsage.overBy?'over':''}`} role="status"><div><strong>模型提示词额度</strong><span>{videoUsage.used.toLocaleString()} / {videoUsage.limit.toLocaleString()} 字符</span></div><small>含当前节点、已知上游文字和平台自动附加约束；参考素材 {referenceCount}/{videoModel?.maxReferenceAssets??12}。</small>{videoUsage.overBy?<><p>已超出 {videoUsage.overBy.toLocaleString()} 字。运行将在本地拦截，不提交服务商、不产生视频费用。</p><div><button type="button" disabled={locked} onClick={compactSelectedPrompt}>一键安全压缩</button><button type="button" disabled={locked||!videoModel} onClick={splitSelectedPrompt}>自动拆分镜头</button></div></>:<p>当前长度符合所选模型要求，可以提交。</p>}</div>}
-      {node.data.kind==='imageInput'&&<><label>项目素材<select disabled={locked} value={node.data.assetId||''} onChange={e=>{const a=state.assets.find(a=>a.id===e.target.value);changeNode({assetId:a?.id,origin:a?.origin});}}><option value="">选择已归档素材</option>{state.assets.filter(a=>a.kind!=='text').map(a=><option key={a.id} value={a.id}>{a.name} · {a.origin.module}</option>)}</select></label><button disabled={locked} onClick={importMedia}>导入本机图片 / 视频 / 音频</button></>}
+      {node.data.kind==='imageInput'&&<><label>项目素材<select disabled={locked} value={node.data.assetId||''} onChange={e=>{const a=state.assets.find(a=>a.id===e.target.value&&a.origin.projectId===doc.projectId);changeNode({assetId:a?.id,origin:a?.origin});}}><option value="">选择本项目素材</option>{state.assets.filter(a=>a.kind!=='text'&&a.origin.projectId===doc.projectId).map(a=><option key={a.id} value={a.id}>{a.name} · {a.origin.module}</option>)}</select></label><button disabled={locked} onClick={importMedia}>导入本机图片 / 视频 / 音频</button></>}
       {['textGenerate','imageGenerate'].includes(node.data.kind)&&<label>模型ID（留空使用统一配置）<input disabled={locked} value={node.data.model||''} onChange={e=>changeNode({model:e.target.value})}/></label>}
       {node.data.kind==='imageGenerate'&&<label>图片尺寸<select disabled={locked} value={node.data.size} onChange={e=>changeNode({size:e.target.value})}>{['1024x1024','1536x1024','1024x1536'].map(v=><option key={v}>{v}</option>)}</select></label>}
       {node.data.kind==='videoGenerate'&&<><VideoModelSelect catalog={catalog} value={node.data.model||''} disabled={locked} onChange={m=>changeNode({model:m.id,resolution:m.resolutions[0]||'480p',aspectRatio:m.aspectRatios.find(a=>a==='9:16')||m.aspectRatios[0]||'9:16',duration:m.durationMin||5,seed:undefined})} onOpenSettings={()=>{void save().then(()=>navigate('/settings')).catch(e=>setNotice(e.message));}}/><label>分辨率<select disabled={videoParametersDisabled} value={node.data.resolution} onChange={e=>changeNode({resolution:e.target.value})}>{(videoModel?.resolutions||[node.data.resolution]).map(v=><option key={v}>{v}</option>)}</select></label><label>画幅<select disabled={videoParametersDisabled} value={node.data.aspectRatio} onChange={e=>changeNode({aspectRatio:e.target.value})}>{(videoModel?.aspectRatios||[node.data.aspectRatio]).map(v=><option key={v}>{v}</option>)}</select></label><label>时长（秒）<input disabled={videoParametersDisabled} type="number" min={videoModel?.durationMin||4} max={videoModel?.durationMax||15} value={node.data.duration} onChange={e=>changeNode({duration:Number(e.target.value)})}/></label><label>随机种子（可选）<input disabled={videoParametersDisabled} type="number" value={node.data.seed??''} onChange={e=>changeNode({seed:e.target.value===''?undefined:Number(e.target.value)})}/></label><p>按输入自动选择文生视频、首帧、首尾帧或多参考；不支持的参数会在提交前拦截。原生声音始终开启。</p></>}
