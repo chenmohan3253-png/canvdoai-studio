@@ -68,16 +68,16 @@ export class StudioEngine {
     else{
       const bytes=input.bytes??await this.readUrl(input.url!);if(!bytes.length)throw Error('素材内容为空');
       asset.sha256=hashBytes(bytes);
-      const suffix=input.kind==='image'?(bytes[0]===137?'png':bytes[0]===255?'jpg':'webp'):input.kind==='video'?'mp4':'m4a';
+      const suffix=input.kind==='image'?(bytes[0]===137?'png':bytes[0]===255?'jpg':'webp'):input.kind==='video'?'mp4':Buffer.from(bytes).toString('ascii',4,8)==='ftyp'?'m4a':'mp3';
       const name=`${asset.sha256}.${suffix}`,folder=join(this.directory,'studio-assets');await mkdir(folder,{recursive:true});
       const temp=join(folder,`${randomUUID()}.tmp`);await writeFile(temp,bytes,{flush:true});await rename(temp,join(folder,name));asset.url=`/api/studio/media/${name}`;
     }
     this.store.put('asset',id,asset);return asset;
   }
-  mediaPath(name:string){if(!/^[a-f0-9]{64}\.(png|jpg|webp|mp4|m4a)$/.test(name))throw Error('素材路径无效');return join(this.directory,'studio-assets',name);}
+  mediaPath(name:string){if(!/^[a-f0-9]{64}\.(png|jpg|webp|mp4|m4a|mp3)$/.test(name))throw Error('素材路径无效');return join(this.directory,'studio-assets',name);}
   async uploadReference(asset:StudioAsset){
-    const bytes=await this.readUrl(asset.url!),form=new FormData();const mime=asset.kind==='image'?'image/png':asset.kind==='video'?'video/mp4':'audio/mp4';
-    form.set('file',new Blob([bytes],{type:mime}),asset.kind==='image'?'reference.png':asset.kind==='video'?'reference.mp4':'reference.m4a');
+    const bytes=await this.readUrl(asset.url!),form=new FormData(),extension=asset.url?.split('.').at(-1)?.toLowerCase();const mime=asset.kind==='image'?'image/png':asset.kind==='video'?'video/mp4':extension==='mp3'?'audio/mpeg':'audio/mp4';
+    form.set('file',new Blob([bytes],{type:mime}),asset.kind==='image'?'reference.png':asset.kind==='video'?'reference.mp4':extension==='mp3'?'reference.mp3':'reference.m4a');
     return this.request(this.config.videoBase,this.config.videoKey,'/v1/assets',undefined,form);
   }
   async generated(node:CanvasNode,inputs:{slot:string;asset:StudioAsset}[],key:string):Promise<StudioAsset>{
@@ -119,8 +119,8 @@ export class StudioEngine {
       const bytes=await this.readUrl(input.asset.url!);const form=new FormData();
       const extension=new URL(input.asset.url!,this.local().origin).pathname.split('.').at(-1)?.toLowerCase();
       const imageMime=extension==='jpg'||extension==='jpeg'?'image/jpeg':extension==='webp'?'image/webp':'image/png';
-      const mime=input.asset.kind==='image'?imageMime:input.asset.kind==='video'?'video/mp4':'audio/mpeg';
-      const fileName=input.asset.kind==='image'?`reference.${extension==='jpeg'?'jpg':['jpg','webp'].includes(extension||'')?extension:'png'}`:input.asset.kind==='video'?'reference.mp4':'reference.mp3';
+      const mime=input.asset.kind==='image'?imageMime:input.asset.kind==='video'?'video/mp4':extension==='m4a'?'audio/mp4':'audio/mpeg';
+      const fileName=input.asset.kind==='image'?`reference.${extension==='jpeg'?'jpg':['jpg','webp'].includes(extension||'')?extension:'png'}`:input.asset.kind==='video'?'reference.mp4':extension==='m4a'?'reference.m4a':'reference.mp3';
       form.set('file',new Blob([bytes],{type:mime}),fileName);
       const uploaded=await this.request(cfg.videoBase,cfg.videoKey,'/v1/assets',undefined,form);assets.push({...uploaded,url:uploaded.cdn_url,role:input.slot,order:i});
     }

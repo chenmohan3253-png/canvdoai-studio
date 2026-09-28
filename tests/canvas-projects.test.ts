@@ -34,6 +34,19 @@ describe('创作画布项目隔离',()=>{
     const valid=canvas(b.id);valid.nodes[0].data.assetId=asset.id;
     expect(value.saveCanvas(valid,0).projectId).toBe(b.id);
   });
+  it('显式复制旧画布时保留已生成版本但重建项目内素材归属，不重新运行',()=>{
+    const value=store(),a=value.createProject('旧测试'),b=value.createProject('正式制作');
+    const asset:StudioAsset={id:randomUUID(),name:'已完成的8秒镜头',kind:'video',url:'/api/studio/media/'+'a'.repeat(64)+'.mp4',sha256:'a'.repeat(64),createdAt:'2026-09-01T00:00:00Z',origin:{module:'canvas',projectId:a.id}};
+    value.put('asset',asset.id,asset);
+    const original=canvas(a.id),versionId=randomUUID();original.nodes[0].data.versions=[{id:versionId,assetId:asset.id,fingerprint:'done',createdAt:'2026-09-01T00:00:00Z'}];original.nodes[0].data.selectedVersion=versionId;
+    const saved=value.saveCanvas(original,0),copied=value.cloneCanvas(saved.id,b.id,'正式版');
+    expect(copied.id).not.toBe(saved.id);expect(copied.projectId).toBe(b.id);expect(copied.nodes[0].id).not.toBe(saved.nodes[0].id);
+    const copiedVersion=copied.nodes[0].data.versions[0],copiedAsset=value.get<StudioAsset>('asset',copiedVersion.assetId);
+    expect(copiedVersion.assetId).not.toBe(asset.id);expect(copied.nodes[0].data.selectedVersion).toBe(copiedVersion.id);
+    expect(copiedAsset?.url).toBe(asset.url);expect(copiedAsset?.origin.projectId).toBe(b.id);
+    expect(value.get<CanvasDocument>('canvas',saved.id)?.nodes[0].data.versions[0].assetId).toBe(asset.id);
+    expect(value.list('canvas-task')).toHaveLength(0);
+  });
   it('HTTP 接口按项目创建并过滤画布，拒绝跨项目保存',async()=>{
     const directory=mkdtempSync(join(tmpdir(),'canvdoai-project-test-'));directories.push(directory);
     const engine=new StudioEngine(directory,{},()=>({origin:'http://127.0.0.1:1',token:'not-used'}));stores.push(engine.store);
@@ -53,6 +66,29 @@ describe('创作画布项目隔离',()=>{
       expect(scoped.canvases.map((item:CanvasDocument)=>item.id)).toEqual([first.body.id]);
       expect((await post('/api/studio/canvas',{...first.body,projectId:b.id})).status).toBe(400);
       expect((await post('/api/studio/canvas/create',{projectId:'missing',name:'错误',templateId:'blank'})).status).toBe(400);
+    }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
+  });
+  it('本机素材上传按项目归档并校验格式，音频保持 MP3 类型',async()=>{
+    const directory=mkdtempSync(join(tmpdir(),'canvdoai-asset-upload-test-'));directories.push(directory);
+    const engine=new StudioEngine(directory,{},()=>({origin:'http://127.0.0.1:1',token:'not-used'}));stores.push(engine.store);
+    const routes=connect();registerStudioRoutes(routes,engine,{} as any);
+    const server=createServer(routes);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const address=server.address();if(!address||typeof address==='string')throw Error('HTTP test server unavailable');
+    const base=`http://127.0.0.1:${address.port}`,a=engine.store.createProject('素材甲'),b=engine.store.createProject('素材乙');
+    const upload=async(projectId:string,kind:string,name:string,bytes:Buffer)=>fetch(base+`/api/studio/asset/upload?${new URLSearchParams({projectId,kind,name})}`,{method:'POST',body:bytes});
+    try{
+      const image=await upload(a.id,'image','参考图.png',Buffer.from([137,80,78,71,13,10,26,10,1,2,3]));
+      expect(image.status).toBe(201);const asset=await image.json() as StudioAsset;
+      expect(asset.origin.projectId).toBe(a.id);expect(asset.url).toMatch(/\.png$/);
+      const audio=await upload(a.id,'audio','旁白.mp3',Buffer.from('ID3sample'));
+      expect(audio.status).toBe(201);const voice=await audio.json() as StudioAsset;
+      expect(voice.url).toMatch(/\.mp3$/);
+      const media=await fetch(base+voice.url);expect(media.headers.get('content-type')).toBe('audio/mpeg');
+      expect((await media.arrayBuffer()).byteLength).toBe(9);
+      expect((await upload(a.id,'image','伪图片.png',Buffer.from('not-an-image'))).status).toBe(400);
+      expect((await upload('missing','image','参考图.png',Buffer.from([137,80,78,71,13,10,26,10]))).status).toBe(400);
+      const foreign=canvas(b.id);foreign.nodes[0].data.assetId=asset.id;
+      expect(()=>engine.store.saveCanvas(foreign,0)).toThrow('其他项目');
     }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
   });
 });

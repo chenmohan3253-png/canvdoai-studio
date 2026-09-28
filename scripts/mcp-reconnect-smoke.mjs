@@ -5,6 +5,7 @@ import { createServer as createPipeServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 
 const appData = join(tmpdir(), `canvdoai-mcp-smoke-${randomUUID()}`);
 const suffix = createHash('sha256').update(join(appData, 'canvdoai-desktop').toLowerCase()).digest('hex').slice(0, 24);
@@ -15,7 +16,7 @@ let currentOrigin = '';
 let child;
 
 async function startStudio(label) {
-  const projects = [], canvases = [{id:label,name:label,nodes:[]}];
+  const projects = [], assets = [], canvases = [{id:label,name:label,nodes:[]}];
   const server = createHttpServer(async (request, response) => {
     if (request.headers['x-canvdoai-session'] !== token) {
       response.writeHead(401).end();
@@ -26,14 +27,21 @@ async function startStudio(label) {
     if (request.method === 'POST') {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
-      const input = JSON.parse(Buffer.concat(chunks).toString());
+      const bytes = Buffer.concat(chunks);
+      const input = url.pathname === '/api/studio/asset/upload' ? undefined : JSON.parse(bytes.toString());
       if (url.pathname === '/api/studio/project') {
         value = {id:`project-${label}`,name:input.name};projects.push(value);
       } else if (url.pathname === '/api/studio/canvas/create') {
-        value = {id:`canvas-${label}`,name:input.name,projectId:input.projectId,nodes:[],revision:1};canvases.push(value);
+        value = {id:`canvas-${label}`,name:input.name,projectId:input.projectId,nodes:[{id:'script-node',data:{kind:'textInput',label:'剧本',prompt:'',versions:[]}},{id:'video-node',data:{kind:'videoGenerate',label:'视频',prompt:'',versions:[]}}],edges:[],revision:1};canvases.push(value);
+      } else if (url.pathname === '/api/studio/canvas') {
+        value = {...input,revision:input.revision+1};
+        const index=canvases.findIndex(canvas=>canvas.id===input.id);if(index<0){response.writeHead(404).end();return;}canvases[index]=value;
+      } else if (url.pathname === '/api/studio/asset/upload') {
+        if (bytes.subarray(0,8).toString('hex') !== '89504e470d0a1a0a') {response.writeHead(400).end();return;}
+        value={id:`asset-${label}`,name:url.searchParams.get('name'),kind:url.searchParams.get('kind'),url:'/api/studio/media/test.png',origin:{projectId:url.searchParams.get('projectId')}};assets.push(value);
       }
     }
-    if (url.pathname === '/api/studio/state') value = {projects,canvases:canvases.filter(canvas=>!url.searchParams.has('projectId')||canvas.projectId===url.searchParams.get('projectId')),tasks:[]};
+    if (url.pathname === '/api/studio/state') value = {projects,canvases:canvases.filter(canvas=>!url.searchParams.has('projectId')||canvas.projectId===url.searchParams.get('projectId')),assets:assets.filter(asset=>!url.searchParams.has('projectId')||asset.origin.projectId===url.searchParams.get('projectId')),tasks:[]};
     if (!value) { response.writeHead(404).end();return; }
     response.writeHead(200, {'content-type':'application/json'});
     response.end(JSON.stringify(value));
@@ -58,6 +66,7 @@ function request(id, method, params) {
 }
 
 try {
+  await mkdir(appData,{recursive:true});
   currentOrigin = await startStudio('before-restart');
   const pipe = createPipeServer(socket => {
     let input = '';
@@ -92,7 +101,7 @@ try {
   const initialized = await request(1,'initialize',{protocolVersion:'2025-03-26'});
   if (initialized.error) throw new Error(JSON.stringify(initialized.error));
   const tools = await request(2,'tools/list');
-  for (const name of ['list_canvases','list_projects','create_project','create_canvas']) if (!tools.result?.tools?.some(tool => tool.name === name)) throw new Error(`MCP tool unavailable: ${name}`);
+  for (const name of ['list_canvases','list_projects','create_project','create_canvas','clone_canvas_to_project','update_canvas_node','add_canvas_node','connect_canvas_nodes','list_assets','import_local_asset','attach_canvas_asset','get_public_prices']) if (!tools.result?.tools?.some(tool => tool.name === name)) throw new Error(`MCP tool unavailable: ${name}`);
 
   const first = await request(3,'tools/call',{name:'list_canvases',arguments:{}});
   const firstName = JSON.parse(first.result?.content?.[0]?.text ?? '{}').canvases?.[0]?.name;
@@ -104,6 +113,27 @@ try {
   if (JSON.parse(createdCanvas.result?.content?.[0]?.text ?? '{}').canvas?.projectId !== projectId) throw new Error('MCP project-scoped canvas creation failed');
   const projectCanvases = await request(7,'tools/call',{name:'list_canvases',arguments:{projectId}});
   if (JSON.parse(projectCanvases.result?.content?.[0]?.text ?? '{}').canvases?.length !== 1) throw new Error('MCP project filter failed');
+  const canvasId=`canvas-before-restart`;
+  const script=await request(8,'tools/call',{name:'update_canvas_node',arguments:{canvasId,nodeId:'script-node',fields:{prompt:'完整剧本：第一镜头在海边。'}}});
+  if (script.result?.isError) throw new Error(`MCP script update failed: ${script.result.content?.[0]?.text}`);
+  const added=await request(9,'tools/call',{name:'add_canvas_node',arguments:{canvasId,kind:'videoGenerate',fields:{label:'第二镜头',model:'wan-3.0',resolution:'480p',aspectRatio:'9:16',duration:8}}});
+  const shotId=JSON.parse(added.result?.content?.[0]?.text ?? '{}').node?.id;
+  if (!shotId) throw new Error('MCP shot creation failed');
+  const linked=await request(10,'tools/call',{name:'connect_canvas_nodes',arguments:{canvasId,sourceNodeId:'script-node',targetNodeId:shotId,slot:'prompt'}});
+  if (linked.result?.isError) throw new Error(`MCP node connection failed: ${linked.result.content?.[0]?.text}`);
+  const assetPath=join(appData,'reference.png');await writeFile(assetPath,Buffer.from([137,80,78,71,13,10,26,10,1]));
+  const imported=await request(11,'tools/call',{name:'import_local_asset',arguments:{projectId,filePath:assetPath,kind:'image'}});
+  const assetId=JSON.parse(imported.result?.content?.[0]?.text ?? '{}').asset?.id;
+  if (!assetId) throw new Error(`MCP local import failed: ${imported.result?.content?.[0]?.text}`);
+  const attached=await request(12,'tools/call',{name:'attach_canvas_asset',arguments:{canvasId,assetId,targetNodeId:shotId,slot:'first_frame'}});
+  if (attached.result?.isError) throw new Error(`MCP asset attachment failed: ${attached.result.content?.[0]?.text}`);
+  const result=await request(13,'tools/call',{name:'get_canvas',arguments:{canvasId}});
+  const document=JSON.parse(result.result?.content?.[0]?.text ?? '{}');
+  if (!document.nodes?.some(node=>node.id==='script-node'&&node.prompt.includes('完整剧本'))||!document.edges?.some(edge=>edge.target===shotId&&edge.targetHandle==='first_frame')) throw new Error('MCP canvas changes not persisted');
+  const prices=await request(14,'tools/call',{name:'get_public_prices',arguments:{}});
+  if (JSON.parse(prices.result?.content?.[0]?.text ?? '{}').prices?.length!==11) throw new Error('MCP public price table unavailable');
+  const listed=await request(15,'tools/call',{name:'list_assets',arguments:{projectId}});
+  if (JSON.parse(listed.result?.content?.[0]?.text ?? '{}').assets?.[0]?.id!==assetId) throw new Error('MCP project asset listing failed');
 
   currentOrigin = await startStudio('after-restart');
   const second = await request(4,'tools/call',{name:'list_canvases',arguments:{}});
@@ -114,4 +144,5 @@ try {
 } finally {
   child?.kill();
   for (const server of servers) await new Promise(resolve => server.close(resolve));
+  await rm(appData,{recursive:true,force:true});
 }

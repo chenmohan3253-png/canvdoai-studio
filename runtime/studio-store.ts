@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { CanvasDocument,CanvasTask,StudioAsset,StudioProject } from '../src/desktop/canvas-model';
+import {validateGraph,type CanvasDocument,type CanvasTask,type StudioAsset,type StudioProject} from '../src/desktop/canvas-model';
 export class StudioStore {
   db:DatabaseSync;
   constructor(readonly directory:string){mkdirSync(directory,{recursive:true});this.db=new DatabaseSync(join(directory,'studio.sqlite'));this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -27,6 +27,34 @@ export class StudioStore {
       if(this.projects().some(project=>project.name.toLocaleLowerCase()===clean.toLocaleLowerCase()))throw Error('已有同名项目，请使用不同名称');
       const now=new Date().toISOString(),project:StudioProject={id:`project-${randomUUID()}`,name:clean,createdAt:now,updatedAt:now};
       this.put('project',project.id,project);return project;
+    });
+  }
+  cloneCanvas(sourceCanvasId:string,targetProjectId:string,name:string):CanvasDocument{
+    const clean=typeof name==='string'?name.trim():'';
+    if(!clean||clean.length>80)throw Error('画布名称须为 1–80 个字符');
+    return this.transaction(()=>{
+      const source=this.get<CanvasDocument>('canvas',sourceCanvasId);
+      if(!source)throw Error('源画布不存在');
+      const invalid=validateGraph(source,this.assets());if(invalid)throw Error(`源画布不可复制：${invalid}`);
+      if(!this.projects().some(project=>project.id===targetProjectId))throw Error('目标项目不存在');
+      if(this.list<CanvasTask>('canvas-task').some(task=>task.canvasId===sourceCanvasId&&['QUEUED','RUNNING'].includes(task.state)))throw Error('源画布仍有运行任务，请等待完成再复制');
+      const now=new Date().toISOString(),assetIds=new Map<string,string>(),nodeIds=new Map(source.nodes.map(node=>[node.id,randomUUID()]));
+      const copyAsset=(oldId:string|undefined)=>{
+        if(!oldId)return oldId;
+        if(assetIds.has(oldId))return assetIds.get(oldId)!;
+        const asset=this.get<StudioAsset>('asset',oldId);if(!asset)throw Error('源画布引用的素材已不存在');
+        const id=randomUUID();assetIds.set(oldId,id);
+        this.put('asset',id,{...asset,id,createdAt:now,origin:{...asset.origin,module:'import',projectId:targetProjectId}});
+        return id;
+      };
+      const nodes=source.nodes.map(node=>{
+        const versions=node.data.versions.map(version=>({...version,id:randomUUID(),assetId:copyAsset(version.assetId)!}));
+        const selectedIndex=node.data.versions.findIndex(version=>version.id===node.data.selectedVersion);
+        return {...structuredClone(node),id:nodeIds.get(node.id)!,selected:false,data:{...structuredClone(node.data),assetId:copyAsset(node.data.assetId),versions,selectedVersion:selectedIndex>=0?versions[selectedIndex].id:undefined,origin:node.data.origin?{...node.data.origin,projectId:targetProjectId}:undefined}};
+      });
+      const edges=source.edges.map(edge=>({...structuredClone(edge),id:randomUUID(),source:nodeIds.get(edge.source)!,target:nodeIds.get(edge.target)!,selected:false}));
+      const canvas:CanvasDocument={...structuredClone(source),id:randomUUID(),name:clean,projectId:targetProjectId,revision:1,updatedAt:now,nodes,edges};
+      this.assertProjectAssets(canvas);this.put('canvas',canvas.id,canvas);return canvas;
     });
   }
   assertProjectAssets(doc:CanvasDocument){
