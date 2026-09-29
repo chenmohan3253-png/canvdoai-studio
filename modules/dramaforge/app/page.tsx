@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Clapperboard, FolderKanban, History, House, Images, LayoutTemplate } from "lucide-react";
 import { StagePanels } from "./StagePanels";
 import { emitDramaForgeEvent, getHostContext, type DramaForgeHostContext } from "../lib/host-bridge";
 import { seedanceModelsFromCatalog, SNAPSHOT_SEEDANCE_MODELS, type SeedanceCatalogModel } from "../lib/seedance-catalog";
-import { createDramaBatch, listDramaBatches, loadDramaUploadPolicy, startDramaAnalysis } from "../lib/drama-client";
+import { createDramaBatch, getDramaBatch, listDramaBatches, loadDramaUploadPolicy, startDramaAnalysis } from "../lib/drama-client";
 import { loadSeedanceCatalog, uploadSeedanceAsset } from "../lib/seedance-client";
 import { DRAMA_LANGUAGES, DRAMA_RIGHTS_STATEMENT_VERSION, getMaxAccessibleDramaStep, getRecommendedDramaStep, type DramaBatch, type DramaLanguage, type DramaTargetType } from "../lib/drama-production";
 import { DEFAULT_DRAMA_MAX_DURATION_SECONDS, DEFAULT_DRAMA_MAX_UPLOAD_BYTES, DEFAULT_DRAMA_UPLOAD_CHUNK_BYTES, DRAMA_ACCEPTED_VIDEO_EXTENSIONS, DRAMA_ACCEPTED_VIDEO_TYPES, type DramaUploadPolicy } from "../lib/drama-upload-policy";
@@ -61,7 +61,7 @@ const fallbackUploadPolicy: DramaUploadPolicy = {
   checksum: "sha256",
 };
 
-export default function DramaForgeHome({ embedded = false }: { embedded?: boolean } = {}) {
+export default function DramaForgeHome({ embedded = false, initialBatchId }: { embedded?: boolean; initialBatchId?: string } = {}) {
   const [activeStep, setActiveStep] = useState(0);
   const [rightsChecked, setRightsChecked] = useState(false);
   const [fileName, setFileName] = useState("");
@@ -101,6 +101,32 @@ export default function DramaForgeHome({ embedded = false }: { embedded?: boolea
     setActiveStep(step);
     emitDramaForgeEvent("drama:step-changed", { step, label: steps[step] });
   };
+
+  const restoreBatch = useCallback((selected: DramaBatch) => {
+    setBatch(selected);
+    setFileName(selected.source_name);
+    setSourceDurationSeconds(selected.source_duration_seconds);
+    setResolution(selected.resolution);
+    setSelectedModelId(selected.model);
+    setProcessingMode(selected.processing_mode);
+    setTargetType(selected.target_type);
+    setSourceLanguage(selected.source_language);
+    setTargetLanguage(selected.target_language);
+    setAspectRatio(selected.aspect_ratio);
+    setRightsChecked(true);
+    setProductionError("");
+    setStepNotice("");
+    setActiveStep(getRecommendedDramaStep(selected));
+  }, []);
+
+  useEffect(() => {
+    if (!initialBatchId) return;
+    const controller = new AbortController();
+    getDramaBatch(initialBatchId, controller.signal)
+      .then(restoreBatch)
+      .catch(error => { if (!controller.signal.aborted) setProductionError(error instanceof Error ? error.message : "指定的重制项目无法打开"); });
+    return () => controller.abort();
+  }, [initialBatchId, restoreBatch]);
 
   useEffect(() => {
     const syncContext = () => setHostCapabilities(getHostContext().capabilities);
@@ -215,17 +241,7 @@ export default function DramaForgeHome({ embedded = false }: { embedded?: boolea
                 <small>{resumeBatch.segments.length} 个片段 · {resumeBatch.resolution} · {resumeBatch.status}</small>
               </div>
               <button type="button" onClick={() => {
-                setBatch(resumeBatch);
-                setFileName(resumeBatch.source_name);
-                setSourceDurationSeconds(resumeBatch.source_duration_seconds);
-                setResolution(resumeBatch.resolution);
-                setSelectedModelId(resumeBatch.model);
-                setProcessingMode(resumeBatch.processing_mode);
-                setTargetType(resumeBatch.target_type);
-                setSourceLanguage(resumeBatch.source_language);
-                setTargetLanguage(resumeBatch.target_language);
-                setAspectRatio(resumeBatch.aspect_ratio);
-                moveToStep(getRecommendedDramaStep(resumeBatch), true);
+                restoreBatch(resumeBatch);
               }}>继续任务</button>
             </div>}
 

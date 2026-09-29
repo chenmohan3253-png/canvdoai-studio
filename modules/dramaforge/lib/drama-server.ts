@@ -197,8 +197,12 @@ export async function readProductionBatch(request: Request, batchId: string) {
 
 export async function listProductionBatches(request: Request) {
   const url = new URL(request.url);
-  const limit = Number(url.searchParams.get("limit") || 10);
-  return { data: await listDramaBatchRecords(requestIdentity(request), limit) };
+  const requestedLimit = Number(url.searchParams.get("limit") || 10);
+  const requestedOffset = Number(url.searchParams.get("offset") || 0);
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(50, Math.floor(requestedLimit))) : 10;
+  const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+  const data = await listDramaBatchRecords(requestIdentity(request), limit, offset);
+  return { data, nextOffset: data.length === limit ? offset + limit : null };
 }
 
 export async function exportProductionBatch(request: Request, batchId: string, formatValue: string) {

@@ -20,6 +20,7 @@ export interface DramaForgeHostContext {
 export interface DramaForgeModuleOptions {
   container: HTMLElement;
   context: DramaForgeHostContext;
+  initialBatchId?: string;
   request?: DramaForgeRequestAdapter;
   /** 长片必须由宿主对象存储直传；返回可供 Seedance 下载与校验的素材凭据。 */
   uploadAsset?: DramaForgeUploadAdapter;
@@ -72,7 +73,7 @@ export async function mountDramaModule(options: DramaForgeModuleOptions): Promis
 
   const root = createRoot(mountPoint);
   mountedModules.set(options.container, { root, shadow });
-  root.render(<DramaForgeHome embedded />);
+  root.render(<DramaForgeHome embedded initialBatchId={options.initialBatchId} />);
   options.onEvent?.({ type: "drama:ready", detail: { projectId: context.projectId } });
   const forwardEvent = (event: Event) => {
     const custom = event as CustomEvent<Record<string, unknown>>;

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { ProjectList } from "../video-studio/ProjectList";
+import { UnifiedProjects } from "./UnifiedProjects";
 import { VideoStudio } from "../video-studio/VideoStudio";
 import type { VideoProjectStatus } from "../video-studio/types";
 import { useHarnessController } from "./use-harness-controller";
@@ -87,7 +87,7 @@ export function App() {
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/contact" element={<ContactPage />} />
             <Route path="/" element={<Navigate to="/projects" replace />} />
-            <Route path="/projects" element={<ProjectList projects={projects} onCreateProject={handleCreateProject} onOpenProject={(id) => navigate(`/video-studio/${encodeURIComponent(id)}`)} onDeleteProject={deleteProject} />} />
+            <Route path="/projects" element={<UnifiedProjects projects={projects} onCreateProject={handleCreateProject} onOpenProject={(id) => navigate(`/video-studio/${encodeURIComponent(id)}`)} onDeleteProject={deleteProject} />} />
             <Route path="/video-studio/:projectId" element={activeProject ? <VideoStudio key={activeProject.id} controller={controller} projectName={activeProject.name} initialScript={activeProject.script ?? ""} projects={projects} onCreateProject={handleCreateProject} onOpenProject={(id) => navigate(`/video-studio/${encodeURIComponent(id)}`)} onDeleteProject={handleDeleteOpenProject} onScriptChange={(script) => updateProjectScript(activeProject.id, script)} scriptAssistant={testScriptAssistant} imageAssistant={testImageAssistant} preproductionAssistant={testPreproductionAssistant} chatTestSessionAssistant={testChatSessionAssistant} postproductionAssistant={testPostproductionAssistant} videoProviderAssistant={testVideoProviderAssistant} assistantOrchestrationMode /> : <Navigate to={studioPath} replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

@@ -306,20 +306,21 @@ export async function getDramaBatchRecord(identity: DramaIdentity, batchId: stri
   return batch;
 }
 
-export async function listDramaBatchRecords(identity: DramaIdentity, limit = 20) {
+export async function listDramaBatchRecords(identity: DramaIdentity, limit = 20, offset = 0) {
   const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+  const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
   const db = await database();
   if (!db) {
     return [...memoryBatches.values()]
       .filter((batch) => batch.team_id === identity.teamId && (!identity.projectId || batch.project_id === identity.projectId))
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      .slice(0, safeLimit)
+      .slice(safeOffset, safeOffset + safeLimit)
       .map(clone);
   }
   await ensureSchema(db);
   const query = identity.projectId
-    ? db.prepare("SELECT * FROM drama_batches WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC LIMIT ?").bind(identity.teamId, identity.projectId, safeLimit)
-    : db.prepare("SELECT * FROM drama_batches WHERE team_id = ? ORDER BY updated_at DESC LIMIT ?").bind(identity.teamId, safeLimit);
+    ? db.prepare("SELECT * FROM drama_batches WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?").bind(identity.teamId, identity.projectId, safeLimit, safeOffset)
+    : db.prepare("SELECT * FROM drama_batches WHERE team_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?").bind(identity.teamId, safeLimit, safeOffset);
   const rows = await query.all<Record<string, unknown>>();
   return Promise.all(rows.results.map(async (row) => {
     const batchId = String(row.id);

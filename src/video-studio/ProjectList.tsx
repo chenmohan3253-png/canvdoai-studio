@@ -17,6 +17,7 @@ export interface ProjectListProps {
   projects: VideoProjectSummary[];
   currentProjectId?: string;
   compact?: boolean;
+  category?: string;
   onCreateProject(name: string): Promise<void> | void;
   onOpenProject(projectId: string): void;
   onDeleteProject(projectId: string): Promise<void> | void;
@@ -27,7 +28,7 @@ function updatedLabel(value: string) {
   return Number.isNaN(date.getTime()) ? "刚刚更新" : `更新于 ${date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 }
 
-export function ProjectList({ projects, currentProjectId, compact = false, onCreateProject, onOpenProject, onDeleteProject }: ProjectListProps) {
+export function ProjectList({ projects, currentProjectId, compact = false, category, onCreateProject, onOpenProject, onDeleteProject }: ProjectListProps) {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string>();
@@ -68,9 +69,9 @@ export function ProjectList({ projects, currentProjectId, compact = false, onCre
   }
 
   return (
-    <section className={`${styles.projectCatalog} ${compact ? styles.projectCatalogCompact : ""}`} aria-label="视频项目列表">
+    <section className={`${styles.projectCatalog} ${compact ? styles.projectCatalogCompact : ""}`} aria-label={category ? `${category}项目列表` : "视频项目列表"}>
       <div className={styles.projectCatalogHead}>
-        <div><span className={styles.kicker}>项目列表</span><h2>一个项目，一套独立制作状态</h2><p>剧本、分镜、候选视频、作者确认和最终交付均按项目隔离。</p></div>
+        <div><span className={styles.kicker}>{category ? `${category} · ${projects.length} 个项目` : "项目列表"}</span><h2>一个项目，一套独立制作状态</h2><p>剧本、分镜、候选视频、作者确认和最终交付均按项目隔离。</p></div>
         <form onSubmit={(event) => void createProject(event)}>
           <label htmlFor={`new-video-project-${compact ? "compact" : "full"}`}>新项目名称</label>
           <input id={`new-video-project-${compact ? "compact" : "full"}`} value={name} disabled={creating} maxLength={60} onChange={(event) => setName(event.target.value)} placeholder="例如：第16集·破屋对决" />
