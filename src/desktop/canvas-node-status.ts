@@ -37,7 +37,7 @@ export function canvasNodeStatuses(doc:CanvasDocument,tasks:CanvasTask[]):Map<st
         label=index===completed?'状态待确认':'等待上游恢复';tone='paused';
       }else if(task.state==='FAILED'){
         const validation=task.failureStage==='VALIDATION'||/^(参数校验失败|提示词或参考素材超过模型上限)/.test(task.message);
-        label=index===completed?(validation?'参数校验未通过':generating?'生成失败':'处理失败'):'等待上游恢复';
+        label=index===completed?(validation?'参数校验未通过':task.failureStage==='REFERENCE_UPLOAD'?'参考素材上传失败':generating?'生成失败':'处理失败'):'等待上游恢复';
         tone=index===completed?'failed':'paused';
       }else return;
       // During a retry the old candidate stays usable, but must not hide the new task's status.

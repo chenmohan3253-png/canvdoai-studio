@@ -175,7 +175,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       try{
         switch(request.method){
           case 'initialize':
-            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.13'}});return;
+            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.14'}});return;
           case 'notifications/initialized':
           case 'notifications/cancelled': return;
           case 'ping': result(id,{});return;

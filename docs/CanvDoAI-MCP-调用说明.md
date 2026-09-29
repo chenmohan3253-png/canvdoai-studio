@@ -1,10 +1,10 @@
-# CanvDoAI Studio MCP 调用说明（Windows，v1.1.13）
+# CanvDoAI Studio MCP 调用说明（Windows，v1.1.14）
 
 这份说明用于让同一台电脑上的其他 Codex 项目或聊天操作已安装的 CanvDoAI Studio。MCP 是**本机创作画布控制接口**，不是云端 API，也不等于全平台每个页面都已开放 MCP。Codex 与桌面软件须在同一 Windows 用户会话中运行。
 
 ## 1. 先决条件
 
-1. 安装并打开 CanvDoAI Studio v1.1.13，使用期间保持软件运行。
+1. 安装并打开 CanvDoAI Studio v1.1.14，使用期间保持软件运行。
 2. 软件内按需配置有效的文字、图片、视频 API；仅查看项目、编辑画布、导入本机素材不需要生成 API 额度。
 3. 在 Codex 的用户级 `config.toml` 中只配置一次 MCP。**同一台电脑的其他 Codex 项目会共用此配置，不需要把软件或项目文件复制过去。**
 4. 不要把 API Key、会话令牌或客户素材写进 `config.toml`、聊天提示词、Git 仓库或本说明。
@@ -22,7 +22,7 @@ tool_timeout_sec = 120
 approval_mode = "approve"
 ```
 
-若另一台电脑没有独立的 `D:\CanvDoAI-MCP-Runtime\node.exe`，可把 `command` 改成安装包自带的 `D:\CanvDoAI Studio\resources\mcp\node.exe`。安装路径不是 D 盘时也要同步改 `args`。无需配置 API Key、端口或固定管道名；MCP 会按当前 Windows 用户重新寻找桌面软件会话。
+若另一台电脑没有独立的 `D:\CanvDoAI-MCP-Runtime\node.exe`，可把 `command` 改成安装包自带的 `D:\CanvDoAI Studio\resources\mcp\node.exe`。安装路径不是 D 盘时也要同步改 `args`。无需配置 API Key、端口或固定管道名；MCP 会按当前 Windows 用户重新寻找桌面软件会话。本机已配置好用户级 MCP，同一台电脑的其他项目无需重复配置。
 
 保存配置后重新启动 Codex 或新开聊天，让工具目录重新加载。先调用 `list_projects` 和 `list_canvases` 做只读检查；若这两个都失败，**不要提交生成任务**。
 
@@ -63,6 +63,8 @@ approval_mode = "approve"
 - 目前 MCP 直接覆盖**创作画布的这 17 项操作**。AI 一键成片、视频重制、完整时间线合成、API 设置和供应商实时模型目录仍有各自的软件界面或内部 API；不能声称这 17 项工具已控制全平台每个按钮。
 - `get_public_prices` 是软件内静态公开报价，不是每次任务的最终计费结果。
 - `run_canvas_node` 返回任务已接收，不代表视频已生成成功；继续用 `get_task_status` 检查 `SUCCEEDED` / `FAILED`。失败后先看原因与已有远端任务 ID，避免重复付费。
+- 同一画布只允许一个 `QUEUED` 或 `RUNNING` 任务，以避免同时改写节点候选和重复运行必要上游。不同画布可并行，但每张画布的 API 调用可能分别计费；并行前先核对现有任务与费用授权。
+- v1.1.14 修复了过大参考图的上传兼容性，但供应商真实接口尚未完成付费镜头复测。恢复生产时先只运行一个带参考图的镜头，确认上传与生成都成功后再批量运行。
 - 本机素材导入只接受用户明确指定的绝对文件路径，不接受 UNC 网络路径。跨项目素材不能直接挂载，需按项目归档或明确复制。
 
 ## 5. 连接故障排查

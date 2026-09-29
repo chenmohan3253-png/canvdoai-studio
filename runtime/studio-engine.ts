@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {StudioStore} from './studio-store';
 import {readVideoJobResult,accountFingerprint} from './provider-tasks';
 import {videoGatewayFetch} from './fuliu-adapter';
+import {multipartFile,prepareReferenceImage,type MultipartFile} from './reference-upload';
 import {fetchResultDownload,ResultDownloadError} from './result-download';
 import {nodeFingerprints,upgradeCanvasFingerprints} from './canvas-fingerprint';
 import {executionNodeIds,validateGraph,type CanvasDocument,type CanvasNode,type CanvasTask,type StudioAsset,type MediaKind,type AssetOrigin} from '../src/desktop/canvas-model';
@@ -12,6 +13,7 @@ import {VIDEO_PROMPT_SUFFIX} from '../src/desktop/video-prompt-tools';
 const hash=(v:unknown)=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const now=()=>new Date().toISOString();
 class StudioValidationError extends Error {readonly failureStage='VALIDATION';}
+class ReferenceUploadError extends Error {readonly failureStage='REFERENCE_UPLOAD';}
 function providerErrorText(data:any,key:string){
   const root=data?.error??data;
   const code=typeof root?.code==='string'?root.code:typeof data?.code==='string'?data.code:'';
@@ -39,9 +41,11 @@ export class StudioEngine {
   busy(){return this.running.size>0;}
   stop(){this.stopped=true;}
   async wait(){await Promise.allSettled(this.running.values());}
-  async request(base:string,key:string,path:string,body?:unknown,form?:FormData){
+  async request(base:string,key:string,path:string,body?:unknown,form?:FormData|MultipartFile){
     if(!key)throw Error('请先到 API 接口设置保存对应密钥');
-    const init:RequestInit={method:body||form?'POST':'GET',headers:{Authorization:`Bearer ${key}`,...(!form&&body?{'content-type':'application/json'}:{})},body:form??(body?JSON.stringify(body):undefined),redirect:'error',signal:AbortSignal.timeout(180000)};
+    const rawMultipart=form&&!(form instanceof FormData)?form:undefined;
+    const requestBody:BodyInit|undefined=rawMultipart?Uint8Array.from(rawMultipart.body).buffer as ArrayBuffer:form instanceof FormData?form:body?JSON.stringify(body):undefined;
+    const init:RequestInit={method:body||form?'POST':'GET',headers:{Authorization:`Bearer ${key}`,...(!form&&body?{'content-type':'application/json'}:{}),...(rawMultipart?{'content-type':rawMultipart.contentType,'content-length':String(rawMultipart.body.byteLength)}:{})},body:requestBody,redirect:'error',signal:AbortSignal.timeout(180000)};
     const response=path.startsWith('/v1/')?await videoGatewayFetch({...this.config,videoBase:base,videoKey:key},path,init):await fetch(base.replace(/\/+$/,'')+path,init);
     const data=await response.json().catch(()=>null);
     if(!response.ok)throw Error(`接口 ${path} 返回 HTTP ${response.status}${providerErrorText(data,key)||'：服务商未提供详细错误信息'}`);
@@ -76,9 +80,19 @@ export class StudioEngine {
   }
   mediaPath(name:string){if(!/^[a-f0-9]{64}\.(png|jpg|webp|mp4|m4a|mp3)$/.test(name))throw Error('素材路径无效');return join(this.directory,'studio-assets',name);}
   async uploadReference(asset:StudioAsset){
-    const bytes=await this.readUrl(asset.url!),form=new FormData(),extension=asset.url?.split('.').at(-1)?.toLowerCase();const mime=asset.kind==='image'?'image/png':asset.kind==='video'?'video/mp4':extension==='mp3'?'audio/mpeg':'audio/mp4';
-    form.set('file',new Blob([bytes],{type:mime}),asset.kind==='image'?'reference.png':asset.kind==='video'?'reference.mp4':extension==='mp3'?'reference.mp3':'reference.m4a');
-    return this.request(this.config.videoBase,this.config.videoKey,'/v1/assets',undefined,form);
+    const bytes=await this.readUrl(asset.url!),extension=asset.url?.split('.').at(-1)?.toLowerCase();
+    const file=asset.kind==='image'?await prepareReferenceImage(bytes):{bytes,filename:asset.kind==='video'?'reference.mp4':extension==='mp3'?'reference.mp3':'reference.m4a',mime:asset.kind==='video'?'video/mp4':extension==='mp3'?'audio/mpeg':'audio/mp4'};
+    const form=multipartFile(file);
+    for(let attempt=0;attempt<2;attempt++){
+      try{return await this.request(this.config.videoBase,this.config.videoKey,'/v1/assets',undefined,form);}
+      catch(error){
+        const message=error instanceof Error?error.message:'';
+        if(attempt===1||!/(fetch failed|ECONNRESET|EPIPE|ETIMEDOUT|UND_ERR_SOCKET)/i.test(message))throw error;
+        // This retries only the non-billable asset upload, never the video generation request.
+        await new Promise(resolve=>setTimeout(resolve,500));
+      }
+    }
+    throw Error('参考素材上传未完成');
   }
   async generated(node:CanvasNode,inputs:{slot:string;asset:StudioAsset}[],key:string):Promise<StudioAsset>{
     const cfg={...this.config};
@@ -116,13 +130,13 @@ export class StudioEngine {
     if(references.length>referenceLimit)throw new StudioValidationError(`参数校验失败：当前 ${references.length} 个参考素材，超过 ${modelId} 上限 ${referenceLimit} 个。任务未提交，不会产生视频费用。`);
     const assets:Record<string,unknown>[]=[];
     for(const [i,input]of references.entries()){
-      const bytes=await this.readUrl(input.asset.url!);const form=new FormData();
-      const extension=new URL(input.asset.url!,this.local().origin).pathname.split('.').at(-1)?.toLowerCase();
-      const imageMime=extension==='jpg'||extension==='jpeg'?'image/jpeg':extension==='webp'?'image/webp':'image/png';
-      const mime=input.asset.kind==='image'?imageMime:input.asset.kind==='video'?'video/mp4':extension==='m4a'?'audio/mp4':'audio/mpeg';
-      const fileName=input.asset.kind==='image'?`reference.${extension==='jpeg'?'jpg':['jpg','webp'].includes(extension||'')?extension:'png'}`:input.asset.kind==='video'?'reference.mp4':extension==='m4a'?'reference.m4a':'reference.mp3';
-      form.set('file',new Blob([bytes],{type:mime}),fileName);
-      const uploaded=await this.request(cfg.videoBase,cfg.videoKey,'/v1/assets',undefined,form);assets.push({...uploaded,url:uploaded.cdn_url,role:input.slot,order:i});
+      try{
+        const uploaded=await this.uploadReference(input.asset);
+        assets.push({...uploaded,url:uploaded.cdn_url,role:input.slot,order:i});
+      }catch(cause){
+        const detail=cause instanceof Error?cause.message:'未知上传错误';
+        throw new ReferenceUploadError(`第 ${i+1} 个参考素材上传失败：${detail}。视频生成任务未提交；请先检查上传服务，不要重复批量运行。`);
+      }
     }
     const wanModel=modelId.startsWith('wan-3.0');
     const result=await readVideoJobResult({directory:this.directory,key,account:accountFingerprint(cfg.videoBase,cfg.videoKey),create:()=>this.request(cfg.videoBase,cfg.videoKey,'/v1/video-jobs',{idempotency_key:key,model:modelId,capability,prompt:videoPrompt,parameters:{duration_seconds:node.data.duration,resolution:node.data.resolution,aspect_ratio:node.data.aspectRatio,generate_audio:node.data.generateAudio!==false,...(Number.isInteger(node.data.seed)?{seed:node.data.seed}:{})},assets,allow_fallback:false}),poll:id=>this.request(cfg.videoBase,cfg.videoKey,(wanModel?'/v1/wan-tasks/':'/v1/video-jobs/')+encodeURIComponent(id))},url=>this.readUrl(url));
@@ -167,7 +181,7 @@ export class StudioEngine {
                 const intent=this.store.get<{state:string}>('node-intent',intentKey);
                 if(intent&&['SUBMITTING','UNKNOWN'].includes(intent.state)&&node.data.kind!=='videoGenerate')throw Error('前次文字/图片请求结果未知；为避免重复收费，请核对服务商记录后明确重新生成');
                 this.store.put('node-intent',intentKey,{state:'SUBMITTING',at:now(),canvasId:doc.id,nodeId:id});
-                try{asset=await this.generated(node,inputs,`canvas-${intentKey}`);}catch(e){const validation=e instanceof StudioValidationError;this.store.put('node-intent',intentKey,{state:validation?'NOT_SUBMITTED':'UNKNOWN',at:now(),message:e instanceof Error?e.message:'任务失败'});if(validation)task.failureStage='VALIDATION';else task.failureStage='SUBMISSION_OR_PROVIDER';throw e;}
+                try{asset=await this.generated(node,inputs,`canvas-${intentKey}`);}catch(e){const validation=e instanceof StudioValidationError,upload=e instanceof ReferenceUploadError;this.store.put('node-intent',intentKey,{state:validation||upload?'NOT_SUBMITTED':'UNKNOWN',at:now(),message:e instanceof Error?e.message:'任务失败'});if(validation)task.failureStage='VALIDATION';else if(upload)task.failureStage='REFERENCE_UPLOAD';else task.failureStage='SUBMISSION_OR_PROVIDER';throw e;}
                 asset.origin.projectId=doc.projectId;this.store.put('asset',asset.id,asset);
               }
               this.store.put('node-result',intentKey,{assetId:asset.id});this.store.put('node-intent',intentKey,{state:'SUCCEEDED'});
@@ -178,7 +192,7 @@ export class StudioEngine {
           task.completed++;this.store.put('canvas-task',task.id,task);
         }
         task.state='SUCCEEDED';task.message='完成；已保存所有节点版本';
-      }catch(e){task.state='FAILED';task.message=e instanceof Error?e.message:'任务失败';if(e instanceof StudioValidationError)task.failureStage='VALIDATION';}
+      }catch(e){task.state='FAILED';task.message=e instanceof Error?e.message:'任务失败';if(e instanceof StudioValidationError)task.failureStage='VALIDATION';else if(e instanceof ReferenceUploadError)task.failureStage='REFERENCE_UPLOAD';}
       finally{this.store.put('canvas-task',task.id,task);}
     };
     const promise=run().finally(()=>this.running.delete(task.id));this.running.set(task.id,promise);

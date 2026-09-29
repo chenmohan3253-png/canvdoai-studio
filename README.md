@@ -6,9 +6,9 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 
 ## Windows 安装包直接下载
 
-- [下载 CanvDoAI Studio 1.1.13 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.13/CanvDoAI-Studio-1.1.13-Setup.exe)
-- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.13/CanvDoAI-Studio-1.1.13-Setup-SHA256.txt)
-- [查看 1.1.13 发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.13)
+- [下载 CanvDoAI Studio 1.1.14 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.14/CanvDoAI-Studio-1.1.14-Setup.exe)
+- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.14/CanvDoAI-Studio-1.1.14-Setup-SHA256.txt)
+- [查看 1.1.14 发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.14)
 
 安装包适用于 Windows 10/11 x64，已经内置 FFmpeg/FFprobe 和本机 MCP 所需运行时，不需要另外安装 Node.js、Python 或本地大模型。当前安装包尚未进行企业代码签名，Windows SmartScreen 可能显示“未知发布者”；请确认下载来源为本仓库并核对同一 Release 页面提供的 SHA-256。软件安装后可直接打开，但 AI 生成需要在“API 接口设置”中填写有效接口和密钥。
 
@@ -87,7 +87,9 @@ npm start
 - [1.1.11 更新说明](docs/CanvDoAI-Studio-1.1.11-更新说明.md)：项目隔离、MCP 新工具、验证范围与已知边界
 - [1.1.12 更新说明](docs/CanvDoAI-Studio-1.1.12-更新说明.md)：三模块统一项目目录与重制批次直达
 - [1.1.13 更新说明](docs/CanvDoAI-Studio-1.1.13-更新说明.md)：创作画布项目删除、恢复与 MCP 项目管理
+- [1.1.14 更新说明](docs/CanvDoAI-Studio-1.1.14-更新说明.md)：大参考图上传修复、网络重试与上传失败提示
 - [MCP 调用说明](docs/CanvDoAI-MCP-调用说明.md)：在其他 Codex 项目中连接本机软件、17 项工具的用途和安全边界
+- [跨任务 MCP 使用说明](docs/CanvDoAI-跨任务使用说明-1.1.14.md)：可复制到另一项 Codex 任务的安全操作指令
 - [内置工作流模板](docs/内置工作流模板-1.1.0.md)：各模板的节点、连线与适用场景
 - [发布验收标准](docs/发布验收标准.md)：哪些能力已自动验证，哪些必须使用真实供应商接口验收
 

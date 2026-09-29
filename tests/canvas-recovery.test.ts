@@ -33,5 +33,24 @@ describe('画布迁移和重复消耗保护',()=>{
     expect(request.mock.calls.some(([, ,path])=>path==='/v1/video-jobs')).toBe(false);
     expect(first.store.list<any>('node-intent')[0]).toMatchObject({state:'NOT_SUBMITTED'});
   });
+  it('参考图上传失败记录为未提交，绝不调用视频任务接口',async()=>{
+    const first=engine();vi.mocked(first.generated).mockRestore();first.configure({...config,videoBase:'https://example.invalid',videoKey:'test-key'});
+    const source=newNode('imageInput'),video=newNode('videoGenerate');
+    const asset:StudioAsset={id:'reference-image',name:'测试图片',kind:'image',url:'/api/studio/media/reference.png',sha256:'a'.repeat(64),createdAt:'',origin:{module:'canvas',projectId:'fixture'}};
+    first.store.put('asset',asset.id,asset);source.data.assetId=asset.id;
+    video.data={...video.data,prompt:'湖边镜头',model:'wan-3.0-test',duration:8,resolution:'480p',aspectRatio:'16:9'};
+    const doc:CanvasDocument={id:randomUUID(),name:'参考上传失败',projectId:'fixture',revision:0,updatedAt:'',nodes:[source,video],edges:[{id:randomUUID(),source:source.id,target:video.id,targetHandle:'first_frame'}]};
+    first.store.saveCanvas(doc,0);
+    const request=vi.spyOn(first,'request').mockImplementation(async(_base,_key,path)=>{
+      if(path==='/v1/providers/capabilities')return {models:[{model:'wan-3.0-test',capabilities:['image_to_video'],resolutions:['480p'],aspect_ratios:['16:9'],duration_min:4,duration_max:15,prompt_max_chars:5000,max_reference_assets:12}]};
+      throw Error('不应调用 '+path);
+    });
+    vi.spyOn(first,'uploadReference').mockRejectedValue(Error('接口 /v1/assets 返回 HTTP 400：Error parsing multipart/form-data request'));
+    const task=await run(first,doc.id);
+    expect(task).toMatchObject({state:'FAILED',failureStage:'REFERENCE_UPLOAD'});
+    expect(task.message).toContain('视频生成任务未提交');
+    expect(request.mock.calls.some(([, ,path])=>path==='/v1/video-jobs')).toBe(false);
+    expect(first.store.list<any>('node-intent')[0]).toMatchObject({state:'NOT_SUBMITTED'});
+  });
   it('内容哈希相同但ID不同的上游产生相同指纹',()=>{const node=newNode('imageGenerate');const asset:StudioAsset={id:'a',kind:'image',sha256:'a'.repeat(64),name:'x',createdAt:'',origin:{module:'canvas',projectId:'x'}};expect(nodeFingerprints(node,[{slot:'reference',asset}],config).current).toBe(nodeFingerprints(node,[{slot:'reference',asset:{...asset,id:'b'}}],config).current);expect(nodeFingerprints(node,[{slot:'reference',asset:{...asset,sha256:'b'.repeat(64)}}],config).current).not.toBe(nodeFingerprints(node,[{slot:'reference',asset}],config).current);});
 });
