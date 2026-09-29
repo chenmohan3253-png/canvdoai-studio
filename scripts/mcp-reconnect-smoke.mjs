@@ -16,7 +16,7 @@ let currentOrigin = '';
 let child;
 
 async function startStudio(label) {
-  const projects = [], assets = [], canvases = [{id:label,name:label,nodes:[]}];
+  const projects = [], archivedProjects = [], assets = [], tasks = [], canvases = [{id:label,name:label,nodes:[]}];
   const server = createHttpServer(async (request, response) => {
     if (request.headers['x-canvdoai-session'] !== token) {
       response.writeHead(401).end();
@@ -31,17 +31,33 @@ async function startStudio(label) {
       const input = url.pathname === '/api/studio/asset/upload' ? undefined : JSON.parse(bytes.toString());
       if (url.pathname === '/api/studio/project') {
         value = {id:`project-${label}`,name:input.name};projects.push(value);
+      } else if (url.pathname === '/api/studio/project/archive') {
+        const index=projects.findIndex(project=>project.id===input.projectId&&project.name===input.projectName);
+        if(index<0||input.confirmDelete!==true){response.writeHead(400).end();return;}
+        const [project]=projects.splice(index,1);
+        archivedProjects.push({id:project.id,name:project.name,canvasCount:canvases.filter(canvas=>canvas.projectId===project.id).length,deletedAt:new Date().toISOString()});
+        value={id:project.id,name:project.name};
+      } else if (url.pathname === '/api/studio/project/restore') {
+        const index=archivedProjects.findIndex(project=>project.id===input.projectId);
+        if(index<0||input.confirmRestore!==true){response.writeHead(400).end();return;}
+        const [project]=archivedProjects.splice(index,1);value={id:project.id,name:project.name};projects.push(value);
       } else if (url.pathname === '/api/studio/canvas/create') {
         value = {id:`canvas-${label}`,name:input.name,projectId:input.projectId,nodes:[{id:'script-node',data:{kind:'textInput',label:'剧本',prompt:'',versions:[]}},{id:'video-node',data:{kind:'videoGenerate',label:'视频',prompt:'',versions:[]}}],edges:[],revision:1};canvases.push(value);
       } else if (url.pathname === '/api/studio/canvas') {
         value = {...input,revision:input.revision+1};
         const index=canvases.findIndex(canvas=>canvas.id===input.id);if(index<0){response.writeHead(404).end();return;}canvases[index]=value;
+      } else if (url.pathname === '/api/studio/canvas/clone') {
+        const source=canvases.find(canvas=>canvas.id===input.sourceCanvasId);
+        if(!source){response.writeHead(404).end();return;}
+        value={...structuredClone(source),id:`clone-${label}`,name:input.name,projectId:input.targetProjectId,revision:1};canvases.push(value);
+      } else if (url.pathname === '/api/studio/run') {
+        value={id:`task-${label}`,canvasId:input.canvasId,nodeId:input.nodeId,state:'QUEUED',message:'隔离测试任务',completed:0,total:1,createdAt:new Date().toISOString()};tasks.push(value);
       } else if (url.pathname === '/api/studio/asset/upload') {
         if (bytes.subarray(0,8).toString('hex') !== '89504e470d0a1a0a') {response.writeHead(400).end();return;}
         value={id:`asset-${label}`,name:url.searchParams.get('name'),kind:url.searchParams.get('kind'),url:'/api/studio/media/test.png',origin:{projectId:url.searchParams.get('projectId')}};assets.push(value);
       }
     }
-    if (url.pathname === '/api/studio/state') value = {projects,canvases:canvases.filter(canvas=>!url.searchParams.has('projectId')||canvas.projectId===url.searchParams.get('projectId')),assets:assets.filter(asset=>!url.searchParams.has('projectId')||asset.origin.projectId===url.searchParams.get('projectId')),tasks:[]};
+    if (url.pathname === '/api/studio/state') value = {projects,archivedProjects,canvases:canvases.filter(canvas=>!url.searchParams.has('projectId')||canvas.projectId===url.searchParams.get('projectId')),assets:assets.filter(asset=>!url.searchParams.has('projectId')||asset.origin.projectId===url.searchParams.get('projectId')),tasks};
     if (!value) { response.writeHead(404).end();return; }
     response.writeHead(200, {'content-type':'application/json'});
     response.end(JSON.stringify(value));
@@ -101,7 +117,9 @@ try {
   const initialized = await request(1,'initialize',{protocolVersion:'2025-03-26'});
   if (initialized.error) throw new Error(JSON.stringify(initialized.error));
   const tools = await request(2,'tools/list');
-  for (const name of ['list_canvases','list_projects','create_project','create_canvas','clone_canvas_to_project','update_canvas_node','add_canvas_node','connect_canvas_nodes','list_assets','import_local_asset','attach_canvas_asset','get_public_prices']) if (!tools.result?.tools?.some(tool => tool.name === name)) throw new Error(`MCP tool unavailable: ${name}`);
+  const expectedTools=['list_projects','create_project','archive_project','restore_project','create_canvas','clone_canvas_to_project','list_assets','import_local_asset','update_canvas_node','add_canvas_node','connect_canvas_nodes','attach_canvas_asset','get_public_prices','list_canvases','get_canvas','get_task_status','run_canvas_node'];
+  for (const name of expectedTools) if (!tools.result?.tools?.some(tool => tool.name === name)) throw new Error(`MCP tool unavailable: ${name}`);
+  if (tools.result?.tools?.length !== expectedTools.length) throw new Error(`Unexpected MCP tool count: ${tools.result?.tools?.length}`);
 
   const first = await request(3,'tools/call',{name:'list_canvases',arguments:{}});
   const firstName = JSON.parse(first.result?.content?.[0]?.text ?? '{}').canvases?.[0]?.name;
@@ -134,13 +152,29 @@ try {
   if (JSON.parse(prices.result?.content?.[0]?.text ?? '{}').prices?.length!==11) throw new Error('MCP public price table unavailable');
   const listed=await request(15,'tools/call',{name:'list_assets',arguments:{projectId}});
   if (JSON.parse(listed.result?.content?.[0]?.text ?? '{}').assets?.[0]?.id!==assetId) throw new Error('MCP project asset listing failed');
+  const projectList=await request(16,'tools/call',{name:'list_projects',arguments:{}});
+  if (!JSON.parse(projectList.result?.content?.[0]?.text ?? '{}').projects?.some(project=>project.id===projectId)) throw new Error('MCP project listing failed');
+  const cloned=await request(17,'tools/call',{name:'clone_canvas_to_project',arguments:{sourceCanvasId:canvasId,targetProjectId:projectId,name:'复用镜头'}});
+  if (JSON.parse(cloned.result?.content?.[0]?.text ?? '{}').canvas?.id!==`clone-before-restart`) throw new Error('MCP canvas clone failed');
+  const unconfirmedRun=await request(18,'tools/call',{name:'run_canvas_node',arguments:{canvasId}});
+  if (!unconfirmedRun.result?.isError||!unconfirmedRun.result.content?.[0]?.text?.includes('尚未确认费用')) throw new Error('MCP fee confirmation guard failed');
+  const simulatedRun=await request(19,'tools/call',{name:'run_canvas_node',arguments:{canvasId,confirmCost:true}});
+  if (!JSON.parse(simulatedRun.result?.content?.[0]?.text ?? '{}').accepted) throw new Error('MCP isolated task submission failed');
+  const taskStatus=await request(20,'tools/call',{name:'get_task_status',arguments:{canvasId}});
+  if (JSON.parse(taskStatus.result?.content?.[0]?.text ?? '{}').tasks?.[0]?.id!==`task-before-restart`) throw new Error('MCP task status failed');
+  const archived=await request(21,'tools/call',{name:'archive_project',arguments:{projectId,projectName:'隔离测试项目',confirmDelete:true}});
+  if (JSON.parse(archived.result?.content?.[0]?.text ?? '{}').archived?.id!==projectId) throw new Error('MCP project archive failed');
+  const archivedList=await request(22,'tools/call',{name:'list_projects',arguments:{}});
+  if (!JSON.parse(archivedList.result?.content?.[0]?.text ?? '{}').archivedProjects?.some(project=>project.id===projectId)) throw new Error('MCP archived project listing failed');
+  const restored=await request(23,'tools/call',{name:'restore_project',arguments:{projectId,confirmRestore:true}});
+  if (JSON.parse(restored.result?.content?.[0]?.text ?? '{}').project?.id!==projectId) throw new Error('MCP project restore failed');
 
   currentOrigin = await startStudio('after-restart');
   const second = await request(4,'tools/call',{name:'list_canvases',arguments:{}});
   const secondName = JSON.parse(second.result?.content?.[0]?.text ?? '{}').canvases?.[0]?.name;
   if (secondName !== 'after-restart') throw new Error(`MCP retained a stale session: ${secondName}; ${stderr}`);
 
-  console.log('MCP reconnect smoke passed: desktop session changed without restarting MCP.');
+  console.log(`MCP full smoke passed: ${expectedTools.length} tools invoked against an isolated service; desktop session changed without restarting MCP.`);
 } finally {
   child?.kill();
   for (const server of servers) await new Promise(resolve => server.close(resolve));

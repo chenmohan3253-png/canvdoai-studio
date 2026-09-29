@@ -3,15 +3,32 @@ import {MemoryRouter,Route,Routes} from 'react-router-dom';
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {CanvasPage} from '../src/desktop/CanvasPage';
 import type {CanvasDocument} from '../src/desktop/canvas-model';
-import {studioApi} from '../src/desktop/studio-client';
+import {studioApi,archiveStudioProject} from '../src/desktop/studio-client';
 import {createWorkflowDocument,type WorkflowTemplateId} from '../src/desktop/workflow-templates';
 
-vi.mock('../src/desktop/studio-client',()=>({studioApi:vi.fn(),downloadStudio:vi.fn()}));
+vi.mock('../src/desktop/studio-client',()=>({studioApi:vi.fn(),downloadStudio:vi.fn(),archiveStudioProject:vi.fn()}));
 vi.mock('../src/desktop/use-video-catalog',()=>({useVideoCatalog:()=>({session:{configured:true,baseUrl:'http://video.test',models:[{id:'seedance-test',name:'Seedance Test',capabilities:['text_to_video','image_to_video'],resolutions:['480p'],durationMin:5,durationMax:15,aspectRatios:['9:16'],promptMaxChars:5000,maxReferenceAssets:12}]},loading:false,error:'',refresh:vi.fn()})}));
 
-afterEach(()=>vi.clearAllMocks());
+afterEach(()=>{vi.clearAllMocks();vi.unstubAllGlobals();});
 
 describe('工作流模板选择器',()=>{
+  it('画布项目删除使用软件内弹窗，不调用桌面版不支持的 prompt()',async()=>{
+    const project={id:'project-demo',name:'示例项目',createdAt:'',updatedAt:''};
+    const nativePrompt=vi.fn(()=>{throw Error('prompt() is not supported.');});
+    vi.stubGlobal('prompt',nativePrompt);
+    vi.mocked(studioApi).mockImplementation(async path=>{
+      if(path==='/state')return {projects:[project],canvases:[],assets:[],tasks:[]} as any;
+      throw Error('unexpected '+path);
+    });
+    vi.mocked(archiveStudioProject).mockResolvedValue();
+    render(<MemoryRouter initialEntries={['/canvas']}><CanvasPage/></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button',{name:'删除画布项目 示例项目'}));
+    expect(screen.getByRole('dialog',{name:'删除创作画布项目'})).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('请输入完整项目名称以确认'),{target:{value:'示例项目'}});
+    fireEvent.click(screen.getByRole('button',{name:'确认删除'}));
+    await waitFor(()=>expect(archiveStudioProject).toHaveBeenCalledWith(project,'示例项目'));
+    expect(nativePrompt).not.toHaveBeenCalled();
+  });
   it('可先新建独立项目，再在该项目中创建画布',async()=>{
     const projects:{id:string;name:string;createdAt:string;updatedAt:string}[]=[];
     let created:CanvasDocument|undefined;
@@ -30,7 +47,7 @@ describe('工作流模板选择器',()=>{
     await screen.findByText('新短剧 · 新建画布');
     fireEvent.click(screen.getByRole('button',{name:'在此项目创建画布'}));
     await waitFor(()=>expect(created?.projectId).toBe('project-new'));
-    expect(screen.getByText('画布已创建')).toBeInTheDocument();
+    expect(await screen.findByText('画布已创建')).toBeInTheDocument();
   });
   it('选择极速短视频后创建带模型和完整连线的画布',async()=>{
     let created:CanvasDocument|undefined;
@@ -43,7 +60,7 @@ describe('工作流模板选择器',()=>{
       throw Error('unexpected '+path);
     });
     render(<MemoryRouter initialEntries={['/canvas']}><Routes><Route path="/canvas" element={<CanvasPage/>}/><Route path="/canvas/:canvasId" element={<div>画布已创建</div>}/></Routes></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button',{name:/示例项目/}));
+    fireEvent.click(await screen.findByRole('button',{name:/^示例项目/}));
     fireEvent.click(await screen.findByRole('button',{name:/极速短视频/}));
     expect(screen.getByLabelText('画布名称')).toHaveValue('极速短视频');
     fireEvent.click(screen.getByRole('button',{name:'在此项目创建画布'}));

@@ -9,7 +9,7 @@ import connect from 'connect';
 import {StudioStore} from '../runtime/studio-store';
 import {StudioEngine} from '../runtime/studio-engine';
 import {registerStudioRoutes} from '../runtime/studio-api';
-import {newNode,type CanvasDocument,type StudioAsset} from '../src/desktop/canvas-model';
+import {newNode,type CanvasDocument,type CanvasTask,type StudioAsset} from '../src/desktop/canvas-model';
 
 const stores:StudioStore[]=[],directories:string[]=[];
 function store(){const directory=mkdtempSync(join(tmpdir(),'canvdoai-project-test-'));directories.push(directory);const result=new StudioStore(directory);stores.push(result);return result;}
@@ -17,6 +17,37 @@ function canvas(projectId:string):CanvasDocument{return{id:randomUUID(),name:'�
 afterEach(()=>{for(const value of stores.splice(0))value.close();for(const directory of directories.splice(0))rmSync(directory,{recursive:true,force:true});});
 
 describe('创作画布项目隔离',()=>{
+  it('删除项目只归档本项目数据，可恢复画布、任务和专属素材',()=>{
+    const value=store(),a=value.createProject('待删项目'),b=value.createProject('保留项目');
+    const asset:StudioAsset={id:randomUUID(),name:'独立参考图',kind:'image',createdAt:'',origin:{module:'import',projectId:a.id}};
+    const shared:StudioAsset={id:randomUUID(),name:'一键成片共享图',kind:'image',createdAt:'',origin:{module:'oneclick',projectId:a.id}};
+    value.put('asset',asset.id,asset);value.put('asset',shared.id,shared);
+    const target=canvas(a.id);target.nodes[0].data.assetId=asset.id;
+    const saved=value.saveCanvas(target,0),untouched=value.saveCanvas(canvas(b.id),0);
+    const task:CanvasTask={id:randomUUID(),canvasId:saved.id,state:'SUCCEEDED',message:'完成',completed:1,total:1,createdAt:''};value.put('canvas-task',task.id,task);
+    expect(()=>value.archiveProject(a.id,'错误名称')).toThrow('名称不匹配');
+    expect(value.archiveProject(a.id,a.name).canvasCount).toBe(1);
+    expect(value.projects().some(project=>project.id===a.id)).toBe(false);
+    expect(value.get('canvas',saved.id)).toBeUndefined();expect(value.get('canvas-task',task.id)).toBeUndefined();
+    expect(value.get('asset',asset.id)).toBeUndefined();expect(value.get('asset',shared.id)).toEqual(shared);
+    expect(value.get('canvas',untouched.id)).toEqual(untouched);
+    expect(value.archivedProjects()).toEqual([expect.objectContaining({id:a.id,canvasCount:1})]);
+    expect(value.restoreProject(a.id)).toEqual(a);
+    expect(value.get('canvas',saved.id)).toEqual(saved);expect(value.get('canvas-task',task.id)).toEqual(task);
+    expect(value.get('asset',asset.id)).toEqual(asset);expect(value.archivedProjects()).toHaveLength(0);
+  });
+  it('运行中画布无法删除，旧版项目不会被残留共享素材重新显示',()=>{
+    const value=store(),legacy=value.saveCanvas(canvas('local'),0);
+    const task:CanvasTask={id:randomUUID(),canvasId:legacy.id,state:'RUNNING',message:'生成中',completed:0,total:1,createdAt:''};value.put('canvas-task',task.id,task);
+    const legacyName=value.projects().find(project=>project.id==='local')!.name;
+    expect(()=>value.archiveProject('local',legacyName)).toThrow('运行中');
+    expect(value.get('canvas',legacy.id)).toEqual(legacy);
+    value.put('canvas-task',task.id,{...task,state:'FAILED'});
+    value.put('asset','shared',{id:'shared',name:'共享',kind:'image',createdAt:'',origin:{module:'oneclick',projectId:'local'}});
+    value.archiveProject('local',legacyName);
+    expect(value.projects().some(project=>project.id==='local')).toBe(false);
+    expect(value.get('asset','shared')).toBeDefined();
+  });
   it('同名项目拒绝、项目 ID 独立且旧画布仍可见',()=>{
     const value=store(),old=value.saveCanvas(canvas('local'),0),a=value.createProject('剧集 A'),b=value.createProject('剧集 B');
     expect(a.id).not.toBe(b.id);expect(value.projects()).toEqual(expect.arrayContaining([expect.objectContaining({id:'local',legacy:true}),a,b]));
@@ -66,6 +97,15 @@ describe('创作画布项目隔离',()=>{
       expect(scoped.canvases.map((item:CanvasDocument)=>item.id)).toEqual([first.body.id]);
       expect((await post('/api/studio/canvas',{...first.body,projectId:b.id})).status).toBe(400);
       expect((await post('/api/studio/canvas/create',{projectId:'missing',name:'错误',templateId:'blank'})).status).toBe(400);
+      expect((await post('/api/studio/project/archive',{projectId:a.id,projectName:'甲项目'})).status).toBe(400);
+      expect((await post('/api/studio/project/archive',{projectId:a.id,projectName:'甲项目',confirmDelete:true})).status).toBe(200);
+      const deleted=await (await fetch(base+'/api/studio/state')).json();
+      expect(deleted.projects.some((project:{id:string})=>project.id===a.id)).toBe(false);
+      expect(deleted.canvases.some((item:CanvasDocument)=>item.id===first.body.id)).toBe(false);
+      expect(deleted.canvases.some((item:CanvasDocument)=>item.id===second.body.id)).toBe(true);
+      expect(deleted.archivedProjects.some((project:{id:string})=>project.id===a.id)).toBe(true);
+      expect((await post('/api/studio/project/restore',{projectId:a.id,confirmRestore:true})).status).toBe(200);
+      expect((await post('/api/studio/canvas/create',{projectId:a.id,name:'恢复后新画布',templateId:'blank'})).status).toBe(201);
     }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
   });
   it('本机素材上传按项目归档并校验格式，音频保持 MP3 类型',async()=>{

@@ -12,6 +12,8 @@ type RpcRequest={jsonrpc?:string;id?:string|number|null;method?:string;params?:a
 const tools=[
   {name:'list_projects',description:'列出本机创作画布项目及各项目画布数量；不返回 API 密钥。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
   {name:'create_project',description:'新建独立的本机创作项目。不会调用生成 API，不消耗额度；同名项目会拒绝。',inputSchema:{type:'object',properties:{name:{type:'string',description:'项目名称，1–80 字符'}},required:['name'],additionalProperties:false}},
+  {name:'archive_project',description:'删除指定创作画布项目并保留本机可恢复归档。仅在用户明确要求删除该项目时调用；运行中的项目拒绝删除，不删除共享素材或媒体文件。',inputSchema:{type:'object',properties:{projectId:{type:'string'},projectName:{type:'string',description:'从 list_projects 读取的完整项目名称'},confirmDelete:{type:'boolean',const:true}},required:['projectId','projectName','confirmDelete'],additionalProperties:false}},
+  {name:'restore_project',description:'恢复此前删除的创作画布项目及其画布、任务记录和专属素材记录。',inputSchema:{type:'object',properties:{projectId:{type:'string'},confirmRestore:{type:'boolean',const:true}},required:['projectId','confirmRestore'],additionalProperties:false}},
   {name:'create_canvas',description:'在指定项目中新建工作流画布；不会运行节点或消耗生成 API 额度。',inputSchema:{type:'object',properties:{projectId:{type:'string'},name:{type:'string'},templateId:{type:'string',enum:['blank','professional-drama','quick-video','novel-comic','marketing-avatar','video-remake']}},required:['projectId','name','templateId'],additionalProperties:false}},
   {name:'clone_canvas_to_project',description:'明确复制一张旧画布到目标项目；为其引用的素材和已生成版本建立独立项目记录，可复用已有本地结果，不会重新提交生成任务或消耗额度。',inputSchema:{type:'object',properties:{sourceCanvasId:{type:'string'},targetProjectId:{type:'string'},name:{type:'string'}},required:['sourceCanvasId','targetProjectId','name'],additionalProperties:false}},
   {name:'list_assets',description:'列出指定项目已归档的文字、图片、视频和音频素材，供画布挂载；不返回密钥或素材正文。',inputSchema:{type:'object',properties:{projectId:{type:'string'}},required:['projectId'],additionalProperties:false}},
@@ -70,11 +72,19 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
     if(name==='get_public_prices')return content({notice:'软件内公开报价，仅适用于表内 Seedance 档位；实际费用须以所用接口的实时预检和服务商结算为准。',currency:'CNY',prices:videoApiPrices});
     if(name==='list_projects'){
       const state=await api('/api/studio/state');
-      return content({projects:(state.projects||[]).map((project:any)=>({...project,canvasCount:(state.canvases||[]).filter((canvas:any)=>canvas.projectId===project.id).length}))});
+      return content({projects:(state.projects||[]).map((project:any)=>({...project,canvasCount:(state.canvases||[]).filter((canvas:any)=>canvas.projectId===project.id).length})),archivedProjects:state.archivedProjects||[]});
     }
     if(name==='create_project'){
       if(typeof args?.name!=='string'||!args.name.trim())throw Error('name 为必填项');
       return content({project:await api('/api/studio/project',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:args.name})})});
+    }
+    if(name==='archive_project'){
+      if(args?.confirmDelete!==true||typeof args?.projectId!=='string'||typeof args?.projectName!=='string')throw Error('请明确确认项目 ID 和完整名称后再删除');
+      return content({archived:await api('/api/studio/project/archive',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)})});
+    }
+    if(name==='restore_project'){
+      if(args?.confirmRestore!==true||typeof args?.projectId!=='string')throw Error('请明确确认项目 ID 后再恢复');
+      return content({project:await api('/api/studio/project/restore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)})});
     }
     if(name==='create_canvas'){
       if(typeof args?.projectId!=='string'||!args.projectId||typeof args?.name!=='string'||!args.name.trim()||typeof args?.templateId!=='string')throw Error('projectId、name、templateId 均为必填项');
@@ -165,7 +175,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       try{
         switch(request.method){
           case 'initialize':
-            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.11'}});return;
+            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.13'}});return;
           case 'notifications/initialized':
           case 'notifications/cancelled': return;
           case 'ping': result(id,{});return;

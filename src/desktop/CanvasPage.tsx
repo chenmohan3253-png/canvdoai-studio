@@ -4,6 +4,7 @@ import {ReactFlow,Background,Controls,MiniMap,Handle,Position,applyNodeChanges,a
 import '@xyflow/react/dist/style.css';
 import {newNode,NODE_KINDS,NODE_LABELS,validateGraph,arrangeGraph,withoutDanglingEdges,executionNodeIds,type CanvasDocument,type CanvasNode,type StudioAsset,type NodeKind} from './canvas-model';
 import {studioApi,downloadStudio,type StudioState} from './studio-client';
+import {ArchiveProjectDialog} from './ArchiveProjectDialog';
 import {useVideoCatalog} from './use-video-catalog';
 import {VideoModelSelect} from './VideoModelSelect';
 import {canvasNodeStatuses,type CanvasNodeStatus} from './canvas-node-status';
@@ -44,6 +45,7 @@ export function CanvasPage(){
   const catalog=useVideoCatalog(),models=catalog.session;
   const current=useRef(doc),serial=useRef(0),saved=useRef(0),saving=useRef<Promise<void>>(),past=useRef<CanvasDocument[]>([]),future=useRef<CanvasDocument[]>([]),[historyTick,setHistoryTick]=useState(0);
   const [newProjectName,setNewProjectName]=useState(''),[name,setName]=useState('新画布'),[sourceAssetId,setSourceAssetId]=useState(''),[templateId,setTemplateId]=useState<WorkflowTemplateId>('professional-drama');
+  const [deleteTarget,setDeleteTarget]=useState<StudioState['projects'][number]>();
   const projectId=searchParams.get('projectId')||'',currentProject=state.projects?.find(project=>project.id===projectId);
   const file=useRef<HTMLInputElement>(null);
   const active=state.tasks.find(t=>t.canvasId===canvasId&&['QUEUED','RUNNING'].includes(t.state));const locked=busy||!!active;
@@ -77,6 +79,15 @@ export function CanvasPage(){
   async function createProject(){
     const project=await studioApi<{id:string;name:string}>('/project',{name:newProjectName});
     setNewProjectName('');setSearchParams({projectId:project.id});await refresh();setNotice(`项目“${project.name}”已创建；请选择工作流新建画布。`);
+  }
+  function onProjectArchived(project:StudioState['projects'][number]){
+    setDeleteTarget(undefined);
+    if(projectId===project.id)setSearchParams({});
+    void refresh().then(()=>setNotice(`项目“${project.name}”已从画布列表移除；可在下方“最近删除”恢复。`)).catch(error=>setNotice(`项目已归档，但列表刷新失败：${error.message}`));
+  }
+  async function restoreProject(id:string){
+    await studioApi('/project/restore',{projectId:id,confirmRestore:true});
+    await refresh();setSearchParams({projectId:id});setNotice('项目已恢复，画布和任务记录已回到原位置。');
   }
   function add(kind:NodeKind){if(!doc)return;const node=newNode(kind,doc.nodes.length%8);edit({...doc,nodes:[...doc.nodes,node]});setSelected(node.id);}
   function connect(connection:Connection){if(!doc)return;const next={...doc,edges:[...doc.edges,{...connection,id:crypto.randomUUID()}]};const error=validateGraph(next,state.assets);if(error)setNotice(error);else edit(next);}
@@ -136,8 +147,10 @@ export function CanvasPage(){
     <h1>创作画布 · 项目</h1><p>每个项目有独立的画布与素材。新建画布前请先选择项目；创建项目和模板不调用生成 API。</p>
     <div className="canvas-create"><input aria-label="新项目名称" value={newProjectName} onChange={e=>setNewProjectName(e.target.value)} placeholder="输入新项目名称" onKeyDown={e=>{if(e.key==='Enter')createProject().catch(error=>setNotice(error.message));}}/><button className="primary" disabled={!newProjectName.trim()} onClick={()=>createProject().catch(error=>setNotice(error.message))}>新建项目</button><button onClick={()=>file.current?.click()}>导入迁移包</button></div>
     <input ref={file} type="file" accept=".zip" hidden onChange={e=>importPackage(e.target.files?.[0])}/>
-    <div className="canvas-catalog">{(state.projects||[]).map(project=><button key={project.id} aria-pressed={project.id===projectId} style={project.id===projectId?{borderColor:'#9c82ff',background:'#201d3c'}:undefined} onClick={()=>setSearchParams({projectId:project.id})}><strong>{project.name}</strong><small>{state.canvases.filter(canvas=>canvas.projectId===project.id).length} 张画布{project.legacy?' · 旧项目':''}</small></button>)}</div>
+    <div className="canvas-catalog">{(state.projects||[]).map(project=><div className="canvas-project-card" key={project.id}><button aria-pressed={project.id===projectId} style={project.id===projectId?{borderColor:'#9c82ff',background:'#201d3c'}:undefined} onClick={()=>setSearchParams({projectId:project.id})}><strong>{project.name}</strong><small>{state.canvases.filter(canvas=>canvas.projectId===project.id).length} 张画布{project.legacy?' · 旧项目':''}</small></button><button className="canvas-project-delete" disabled={busy} onClick={()=>setDeleteTarget(project)} aria-label={`删除画布项目 ${project.name}`}>删除项目</button></div>)}</div>
+    {deleteTarget&&<ArchiveProjectDialog project={deleteTarget} canvasCount={state.canvases.filter(canvas=>canvas.projectId===deleteTarget.id).length} onClose={()=>setDeleteTarget(undefined)} onArchived={()=>onProjectArchived(deleteTarget)}/>}
     <div role="status">{notice}</div>
+    {!!state.archivedProjects?.length&&<details className="canvas-archived-projects"><summary>最近删除 · {state.archivedProjects.length} 个项目</summary><p>本机保留项目记录与媒体文件，可恢复；重新创建同名项目后请先处理命名冲突。</p>{state.archivedProjects.map(project=><div key={project.id}><span>{project.name} · {project.canvasCount} 张画布</span><button disabled={busy} onClick={()=>restoreProject(project.id).catch(error=>setNotice(error.message))}>恢复项目</button></div>)}</details>}
     {currentProject&&<><h2>{currentProject.name} · 新建画布</h2><div className="workflow-template-grid">{WORKFLOW_TEMPLATES.map(template=><button type="button" key={template.id} className={templateId===template.id?'selected':''} aria-pressed={templateId===template.id} onClick={()=>{setTemplateId(template.id);if(name==='新画布'||WORKFLOW_TEMPLATES.some(item=>item.name===name))setName(template.name);}}><span>{template.badge}</span><strong>{template.name}</strong><p>{template.description}</p><small>{template.steps.join(' → ')}</small></button>)}</div><div className="canvas-create"><input aria-label="画布名称" value={name} onChange={e=>setName(e.target.value)}/><button className="primary" onClick={()=>create().catch(error=>setNotice(error.message))}>在此项目创建画布</button></div><h2 className="canvas-list-title">本项目画布</h2><div className="canvas-catalog">{state.canvases.filter(canvas=>canvas.projectId===projectId).map(canvas=><button key={canvas.id} onClick={()=>navigate('/canvas/'+canvas.id)}><strong>{canvas.name}</strong><small>{canvas.nodes.length} 节点 · {canvas.updatedAt||'刚创建'}</small></button>)}</div></>}
   </section>;
   if(!doc)return <section className="desk-page"><p>{notice||'正在加载画布…'}</p><button onClick={()=>navigate('/canvas')}>返回画布列表</button></section>;

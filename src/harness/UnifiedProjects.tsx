@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { DramaBatch } from "../../modules/dramaforge/lib/drama-production";
 import { studioApi, type StudioState } from "../desktop/studio-client";
+import { ArchiveProjectDialog } from "../desktop/ArchiveProjectDialog";
 import { ProjectList } from "../video-studio/ProjectList";
 import type { VideoProjectSummary } from "../video-studio/types";
 import "./UnifiedProjects.css";
@@ -49,6 +50,7 @@ export function UnifiedProjects({ projects, onCreateProject, onOpenProject, onDe
   const [canvasError, setCanvasError] = useState("");
   const [remakeError, setRemakeError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{project:StudioState['projects'][number];canvasCount:number}>();
   const canvasProjects = canvas?.projects.filter(project =>
     !project.legacy ||
     !projects.some(item => item.id === project.id) ||
@@ -97,8 +99,10 @@ export function UnifiedProjects({ projects, onCreateProject, onOpenProject, onDe
           <span className="unified-kind">创作画布{project.legacy ? " · 旧项目" : ""}</span>
           <h3>{project.name}</h3><p>{canvases.length} 张画布{active ? ` · ${active} 个待处理任务` : ""}</p>
           <small>{project.id}</small><button type="button" onClick={() => navigate(`/canvas?projectId=${encodeURIComponent(project.id)}`)}>打开画布项目</button>
+          <button type="button" className="unified-delete-project" onClick={() => setDeleteTarget({project,canvasCount:canvases.length})} aria-label={`删除画布项目 ${project.name}`}>删除项目</button>
         </article>;
       })}</div>
+      {deleteTarget&&<ArchiveProjectDialog project={deleteTarget.project} canvasCount={deleteTarget.canvasCount} onClose={()=>setDeleteTarget(undefined)} onArchived={()=>{setDeleteTarget(undefined);void refresh();}}/>}
     </section>
 
     <section className="unified-project-section" aria-label="视频重制项目">

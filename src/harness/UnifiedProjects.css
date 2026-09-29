@@ -14,5 +14,6 @@
 .unified-project-grid p, .unified-project-grid small { color: #aab5c9; }
 .unified-project-grid small { overflow-wrap: anywhere; }
 .unified-project-grid article button { margin: 8px 0 0; }
+.unified-project-grid article .unified-delete-project { margin-top: 0; color: #ffb4bc; border-color: #77515b; background: #2a1d27; }
 .unified-kind { color: #bca7ff; font-size: 12px; font-weight: 700; }
 @media (max-width: 700px) { .unified-project-section > header { align-items: flex-start; flex-direction: column; } }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { UnifiedProjects, listAllRemakeBatches } from "../src/harness/UnifiedProjects";
@@ -57,6 +57,28 @@ describe("统一项目目录", () => {
     await screen.findByText("旧片重制甲");
     fireEvent.click(screen.getByRole("button", { name: "继续重制" }));
     expect(screen.getByText("目标地址：/remake?batchId=remake-a")).toBeInTheDocument();
+  });
+
+  it("删除画布项目须输入完整名称，删除后刷新目录且不影响其他模块", async () => {
+    let deleted = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/studio/state") return response(deleted ? { ...canvasState, projects: canvasState.projects.filter(item => item.id !== "canvas-a"), canvases: [] } : canvasState);
+      if (url === "/api/studio/project/archive") { deleted = true; return response({ id: "canvas-a" }); }
+      return response({ data: [remake], nextOffset: null });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/projects"]}><UnifiedProjects projects={oneClick} onCreateProject={vi.fn()} onOpenProject={vi.fn()} onDeleteProject={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByText("画布作品甲")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除画布项目 画布作品甲" }));
+    expect(screen.getByRole("dialog", { name: "删除创作画布项目" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认删除" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("请输入完整项目名称以确认"), { target: { value: "画布作品甲" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByText("画布作品甲")).not.toBeInTheDocument());
+    expect(screen.getByText("一键短片甲")).toBeInTheDocument();
+    expect(screen.getByText("旧片重制甲")).toBeInTheDocument();
+    const archiveCall = fetchMock.mock.calls.find(([url]) => url === "/api/studio/project/archive");
+    expect(JSON.parse(String(archiveCall?.[1]?.body))).toEqual({ projectId: "canvas-a", projectName: "画布作品甲", confirmDelete: true });
   });
 
   it("分页读取全部重制批次，不只显示最近 50 个", async () => {

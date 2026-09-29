@@ -15,7 +15,7 @@ export class StudioStore {
   transaction<T>(action:()=>T):T{this.db.exec('BEGIN IMMEDIATE');try{const r=action();this.db.exec('COMMIT');return r;}catch(e){this.db.exec('ROLLBACK');throw e;}}
   projects():StudioProject[]{
     const projects=new Map(this.list<StudioProject>('project').map(project=>[project.id,project]));
-    const addLegacy=(id:string|undefined)=>{if(id&&!projects.has(id))projects.set(id,{id,name:id==='local'?'旧版默认项目':id,createdAt:'',updatedAt:'',legacy:true});};
+    const addLegacy=(id:string|undefined)=>{if(id&&!projects.has(id)&&!this.get('project-tombstone',id))projects.set(id,{id,name:id==='local'?'旧版默认项目':id,createdAt:'',updatedAt:'',legacy:true});};
     this.list<CanvasDocument>('canvas').forEach(canvas=>addLegacy(canvas.projectId));
     this.assets().forEach(asset=>addLegacy(asset.origin?.projectId));
     return [...projects.values()];
@@ -29,6 +29,40 @@ export class StudioStore {
       this.put('project',project.id,project);return project;
     });
   }
+  archivedProjects():{id:string;name:string;deletedAt:string;canvasCount:number}[]{
+    return this.list<{id:string;name:string;deletedAt:string;canvasCount:number}>('project-archive-index');
+  }
+  archiveProject(id:string,confirmedName:string){return this.transaction(()=>{
+    const project=this.projects().find(item=>item.id===id);
+    if(!project)throw Error('项目不存在或已删除');
+    if(project.name!==confirmedName)throw Error('项目名称不匹配，未删除');
+    const canvases=this.list<CanvasDocument>('canvas').filter(item=>item.projectId===id);
+    const canvasIds=new Set(canvases.map(item=>item.id));
+    const tasks=this.list<CanvasTask>('canvas-task').filter(item=>canvasIds.has(item.canvasId));
+    if(tasks.some(item=>['QUEUED','RUNNING'].includes(item.state)))throw Error('项目仍有运行中任务，请等待任务结束后再删除');
+    const otherAssetIds=new Set(this.list<CanvasDocument>('canvas').filter(item=>!canvasIds.has(item.id)).flatMap(item=>item.nodes.flatMap(node=>[node.data.assetId,...node.data.versions.map(version=>version.assetId)]).filter(Boolean)));
+    const assets=this.assets().filter(item=>item.origin.projectId===id&&['canvas','import'].includes(item.origin.module)&&!otherAssetIds.has(item.id));
+    const deletedAt=new Date().toISOString();
+    this.put('project-archive',id,{project,canvases,tasks,assets,deletedAt});
+    this.put('project-archive-index',id,{id,name:project.name,deletedAt,canvasCount:canvases.length});
+    this.put('project-tombstone',id,{deletedAt});
+    for(const [kind,ids] of [['project',[id]],['canvas',canvases.map(item=>item.id)],['canvas-task',tasks.map(item=>item.id)],['asset',assets.map(item=>item.id)]] as const)
+      for(const recordId of ids)this.db.prepare('DELETE FROM studio_records WHERE kind=? AND id=?').run(kind,recordId);
+    this.event('project-archived',{id,name:project.name,deletedAt,canvasCount:canvases.length});
+    return {id,name:project.name,deletedAt,canvasCount:canvases.length};
+  });}
+  restoreProject(id:string){return this.transaction(()=>{
+    const archive=this.get<{project:StudioProject;canvases:CanvasDocument[];tasks:CanvasTask[];assets:StudioAsset[]}>('project-archive',id);
+    if(!archive)throw Error('未找到可恢复的项目');
+    if(this.projects().some(item=>item.id===id||item.name.toLocaleLowerCase()===archive.project.name.toLocaleLowerCase()))throw Error('已有同名项目或相同项目 ID，无法恢复');
+    this.put('project',id,archive.project);
+    for(const item of archive.canvases)this.put('canvas',item.id,item);
+    for(const item of archive.tasks)this.put('canvas-task',item.id,item);
+    for(const item of archive.assets)this.put('asset',item.id,item);
+    this.db.prepare('DELETE FROM studio_records WHERE kind IN (?,?,?) AND id=?').run('project-archive','project-archive-index','project-tombstone',id);
+    this.event('project-restored',{id,name:archive.project.name});
+    return archive.project;
+  });}
   cloneCanvas(sourceCanvasId:string,targetProjectId:string,name:string):CanvasDocument{
     const clean=typeof name==='string'?name.trim():'';
     if(!clean||clean.length>80)throw Error('画布名称须为 1–80 个字符');

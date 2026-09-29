@@ -23,7 +23,7 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
       if(req.method==='GET'&&path==='/api/studio/state'){
         const projectId=url.searchParams.get('projectId'),canvases=engine.store.list<CanvasDocument>('canvas').filter(c=>!projectId||c.projectId===projectId);
         const ids=new Set(canvases.map(c=>c.id));
-        json({projects:engine.store.projects(),canvases,assets:engine.store.assets().filter(a=>!projectId||a.origin.projectId===projectId),tasks:engine.store.list<CanvasTask>('canvas-task').filter(t=>!projectId||ids.has(t.canvasId)).slice(0,200)});return;
+        json({projects:engine.store.projects(),archivedProjects:engine.store.archivedProjects(),canvases,assets:engine.store.assets().filter(a=>!projectId||a.origin.projectId===projectId),tasks:engine.store.list<CanvasTask>('canvas-task').filter(t=>!projectId||ids.has(t.canvasId)).slice(0,200)});return;
       }
       if(req.method==='GET'&&path.startsWith('/api/studio/export/')){const bytes=await exportCanvas(engine,path.split('/').at(-1)!);res.writeHead(200,{'content-type':'application/zip','content-disposition':'attachment; filename="CanvDoAI-canvas.zip"'});res.end(bytes);return;}
       if(!['POST','PUT'].includes(req.method||'')){json({message:'接口不存在'},404);return;}
@@ -47,6 +47,14 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
       }
       const input=bytes.length?JSON.parse(bytes.toString()):{};
       if(path==='/api/studio/project'){json(engine.store.createProject(input.name),201);return;}
+      if(path==='/api/studio/project/archive'){
+        if(input.confirmDelete!==true||typeof input.projectId!=='string'||typeof input.projectName!=='string')throw Error('请确认项目 ID 和完整名称后再删除');
+        json(engine.store.archiveProject(input.projectId,input.projectName));return;
+      }
+      if(path==='/api/studio/project/restore'){
+        if(input.confirmRestore!==true||typeof input.projectId!=='string')throw Error('请确认要恢复的项目');
+        json(engine.store.restoreProject(input.projectId));return;
+      }
       if(path==='/api/studio/canvas/create'){
         if(typeof input.projectId!=='string'||!engine.store.projects().some(project=>project.id===input.projectId))throw Error('项目不存在，请先新建或选择项目');
         if(!WORKFLOW_TEMPLATES.some(template=>template.id===input.templateId))throw Error('未知画布工作流模板');
