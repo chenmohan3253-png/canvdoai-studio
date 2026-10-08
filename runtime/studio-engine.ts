@@ -8,7 +8,7 @@ import {multipartFile,prepareReferenceImage,type MultipartFile} from './referenc
 import {fetchResultDownload,ResultDownloadError} from './result-download';
 import {nodeFingerprints,upgradeCanvasFingerprints} from './canvas-fingerprint';
 import {executionNodeIds,validateGraph,type CanvasDocument,type CanvasNode,type CanvasTask,type StudioAsset,type MediaKind,type AssetOrigin} from '../src/desktop/canvas-model';
-import {VIDEO_PROMPT_SUFFIX} from '../src/desktop/video-prompt-tools';
+import {videoPromptUsage} from '../src/desktop/video-prompt-tools';
 
 const hash=(v:unknown)=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const now=()=>new Date().toISOString();
@@ -124,9 +124,10 @@ export class StudioEngine {
     if(capability==='first_last_frame'&&!slots.includes('first_frame'))throw new StudioValidationError('参数校验失败：使用尾帧时必须同时提供首帧。任务未提交，不会产生视频费用。');
     if(!model.resolutions?.includes(node.data.resolution)||!model.aspect_ratios?.includes(node.data.aspectRatio))throw new StudioValidationError('参数校验失败：模型不支持所选分辨率或画幅。任务未提交，不会产生视频费用。');
     if(!Number.isInteger(node.data.duration)||node.data.duration<(model.duration_min??4)||node.data.duration>(model.duration_max??15))throw new StudioValidationError(`参数校验失败：镜头时长必须在 ${model.duration_min??4}—${model.duration_max??15} 秒之间。任务未提交，不会产生视频费用。`);
-    const videoPrompt=prompt+VIDEO_PROMPT_SUFFIX;
     const promptLimit=model.prompt_max_chars??5000,referenceLimit=model.max_reference_assets??12;
-    if(videoPrompt.length>promptLimit)throw new StudioValidationError(`参数校验失败：提交提示词 ${videoPrompt.length} 字符，超过 ${modelId} 上限 ${promptLimit} 字符（超出 ${videoPrompt.length-promptLimit}）。请压缩提示词或自动拆分镜头。任务未提交，不会产生视频费用。`);
+    const videoUsage=videoPromptUsage(node.data.prompt,inputs.filter(i=>i.slot==='prompt').map(i=>i.asset.text||''),promptLimit);
+    const videoPrompt=videoUsage.submitted;
+    if(videoUsage.overBy>0)throw new StudioValidationError(`参数校验失败：提交提示词 ${videoUsage.used} 字符，超过 ${modelId} 上限 ${videoUsage.limit} 字符（超出 ${videoUsage.overBy}）。请压缩提示词或自动拆分镜头。任务未提交，不会产生视频费用。`);
     if(references.length>referenceLimit)throw new StudioValidationError(`参数校验失败：当前 ${references.length} 个参考素材，超过 ${modelId} 上限 ${referenceLimit} 个。任务未提交，不会产生视频费用。`);
     const assets:Record<string,unknown>[]=[];
     for(const [i,input]of references.entries()){

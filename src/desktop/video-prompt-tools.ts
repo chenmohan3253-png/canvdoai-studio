@@ -7,6 +7,10 @@ export interface VideoPromptUsage {
   limit:number;
   overBy:number;
   contentBudget:number;
+  nodeChars:number;
+  upstreamChars:number;
+  separatorChars:number;
+  suffixChars:number;
 }
 
 export function composeVideoPromptContent(prompt:string,upstreamText:string[]=[]){
@@ -14,10 +18,13 @@ export function composeVideoPromptContent(prompt:string,upstreamText:string[]=[]
 }
 
 export function videoPromptUsage(prompt:string,upstreamText:string[],limit=5000):VideoPromptUsage{
-  const content=composeVideoPromptContent(prompt,upstreamText);
+  const nodeText=prompt.trim();
+  const upstream=upstreamText.map(value=>value.trim()).filter(Boolean);
+  const parts=[nodeText,...upstream].filter(Boolean);
+  const content=parts.join('\n\n');
   const submitted=content+VIDEO_PROMPT_SUFFIX;
   const safeLimit=Math.max(1,Math.floor(limit)||5000);
-  return {content,submitted,used:submitted.length,limit:safeLimit,overBy:Math.max(0,submitted.length-safeLimit),contentBudget:Math.max(1,safeLimit-VIDEO_PROMPT_SUFFIX.length)};
+  return {content,submitted,used:submitted.length,limit:safeLimit,overBy:Math.max(0,submitted.length-safeLimit),contentBudget:Math.max(0,safeLimit-VIDEO_PROMPT_SUFFIX.length),nodeChars:nodeText.length,upstreamChars:upstream.reduce((total,value)=>total+value.length,0),separatorChars:Math.max(0,parts.length-1)*2,suffixChars:VIDEO_PROMPT_SUFFIX.length};
 }
 
 const platformDuplicatePatterns=[

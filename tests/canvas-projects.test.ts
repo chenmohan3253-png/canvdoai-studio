@@ -131,4 +131,59 @@ describe('创作画布项目隔离',()=>{
       expect(()=>engine.store.saveCanvas(foreign,0)).toThrow('其他项目');
     }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
   });
+  it('总库原件须审核授权，跨项目显式引用后固定 assetId 与内容版本',()=>{
+    const value=store(),a=value.createProject('原项目'),b=value.createProject('目标项目');
+    const source:StudioAsset={id:randomUUID(),name:'角色定妆照',kind:'image',createdAt:'',sha256:'a'.repeat(64),url:'/api/studio/media/'+'a'.repeat(64)+'.png',origin:{module:'import',projectId:a.id}};
+    value.put('asset',source.id,source);
+    expect(()=>value.promoteAsset(source.id,a.id)).toThrow('审核通过');
+    expect(()=>value.updateAssetCatalog(source.id,b.id,{shotId:'E001-S01'})).toThrow('不属于当前项目');
+    expect(()=>value.updateAssetCatalog(source.id,a.id,{sourceAssetId:'forged'})).toThrow('不允许修改');
+    const reviewed=value.updateAssetCatalog(source.id,a.id,{episodeId:'E001',shotId:'S01',characterId:'C01',reviewStatus:'approved',reuseAllowed:true,rightsNote:'已核实自有拍摄素材可跨项目使用'});
+    expect(reviewed.catalog?.shotId).toBe('S01');
+    const shared=value.promoteAsset(source.id,a.id);
+    expect(shared.id).not.toBe(source.id);expect(shared.libraryScope).toBe('shared');
+    expect(value.promoteAsset(source.id,a.id).id).toBe(shared.id);
+    const foreign=canvas(b.id);foreign.nodes[0].data.assetId=shared.id;
+    expect(()=>value.saveCanvas(foreign,0)).toThrow('总库原件');
+    const linked=value.referenceSharedAsset(shared.id,b.id);
+    expect(linked.id).not.toBe(shared.id);expect(linked.origin.projectId).toBe(b.id);
+    expect(linked.sha256).toBe(source.sha256);expect(linked.catalog?.sourceAssetId).toBe(shared.id);
+    expect(value.referenceSharedAsset(shared.id,b.id).id).toBe(linked.id);
+    expect(()=>value.saveCanvas({...foreign,nodes:[{...foreign.nodes[0],data:{...foreign.nodes[0].data,assetId:source.id}}]},0)).toThrow('其他项目');
+    foreign.nodes[0].data.assetId=linked.id;
+    const generator=newNode('videoGenerate',1);generator.data.assetContext={episodeId:'E001',shotId:'S02',characterIds:['C01']};
+    foreign.nodes.push(generator);foreign.edges.push({id:randomUUID(),source:foreign.nodes[0].id,target:generator.id,targetHandle:'reference'});
+    expect(()=>value.saveCanvas(foreign,0)).toThrow('shotId=S01');
+    generator.data.assetContext={episodeId:'E001',shotId:'S01',characterIds:['C02']};
+    expect(()=>value.saveCanvas(foreign,0)).toThrow('限定角色 C01');
+    generator.data.assetContext.characterIds=['C01','C02'];
+    expect(value.saveCanvas(foreign,0).projectId).toBe(b.id);
+    expect(value.assets().filter(asset=>asset.libraryScope==='shared')).toHaveLength(1);
+  });
+  it('HTTP 素材目录只返回当前项目素材，总库引用接口不会调用生成模型',async()=>{
+    const directory=mkdtempSync(join(tmpdir(),'canvdoai-catalog-test-'));directories.push(directory);
+    const engine=new StudioEngine(directory,{},()=>({origin:'http://127.0.0.1:1',token:'not-used'}));stores.push(engine.store);
+    const routes=connect();registerStudioRoutes(routes,engine,{} as any);
+    const server=createServer(routes);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const address=server.address();if(!address||typeof address==='string')throw Error('HTTP test server unavailable');
+    const base=`http://127.0.0.1:${address.port}`,a=engine.store.createProject('源库'),b=engine.store.createProject('项目库');
+    const source:StudioAsset={id:randomUUID(),name:'已授权图',kind:'image',createdAt:'',sha256:'b'.repeat(64),url:'/api/studio/media/'+'b'.repeat(64)+'.png',origin:{module:'import',projectId:a.id}};
+    engine.store.put('asset',source.id,source);
+    const post=async(path:string,data:unknown)=>{const response=await fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});return{status:response.status,body:await response.json()};};
+    try{
+      expect((await post('/api/studio/asset/promote',{projectId:a.id,assetId:source.id,confirmShare:true})).status).toBe(400);
+      expect((await post('/api/studio/asset/catalog',{projectId:a.id,assetId:source.id,catalog:{reviewStatus:'approved',reuseAllowed:true,rightsNote:'已取得可跨项目使用的授权'}})).status).toBe(400);
+      expect((await post('/api/studio/asset/catalog',{projectId:a.id,assetId:source.id,catalog:{reviewStatus:'approved',reuseAllowed:true,rightsNote:'已取得可跨项目使用的授权'},confirmReview:true,confirmReuse:true})).status).toBe(200);
+      expect((await post('/api/studio/asset/promote',{projectId:a.id,assetId:source.id})).status).toBe(400);
+      const promoted=await post('/api/studio/asset/promote',{projectId:a.id,assetId:source.id,confirmShare:true});
+      expect(promoted.status).toBe(201);
+      const scoped=await (await fetch(base+'/api/studio/state?projectId='+encodeURIComponent(b.id))).json();
+      expect(scoped.assets).toHaveLength(0);
+      const linked=await post('/api/studio/asset/reference',{sharedAssetId:promoted.body.id,targetProjectId:b.id});
+      expect(linked.status).toBe(201);expect(linked.body.origin.projectId).toBe(b.id);
+      const after=await (await fetch(base+'/api/studio/state?projectId='+encodeURIComponent(b.id))).json();
+      expect(after.assets.map((item:StudioAsset)=>item.id)).toEqual([linked.body.id]);
+      expect(after.assets.some((item:StudioAsset)=>item.id===promoted.body.id)).toBe(false);
+    }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
+  });
 });

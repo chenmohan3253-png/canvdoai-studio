@@ -3,11 +3,20 @@ export type NodeKind = typeof NODE_KINDS[number];
 export type MediaKind = 'text'|'image'|'video'|'audio';
 export type InputSlot = 'prompt'|'first_frame'|'last_frame'|'reference'|'input';
 export interface AssetOrigin { module:'oneclick'|'remake'|'canvas'|'import'; projectId:string; itemId?:string; field?:string; sourceUrl?:string; }
-export interface StudioAsset { id:string; name:string; kind:MediaKind; url?:string; text?:string; createdAt:string; origin:AssetOrigin; sha256?:string; }
+export interface AssetContext {episodeId?:string;sceneId?:string;shotId?:string;characterId?:string;characterIds?:string[];}
+export interface AssetCatalog extends AssetContext {
+  purpose?:string;
+  reviewStatus?:'unreviewed'|'approved'|'rejected';
+  reuseAllowed?:boolean;
+  rightsNote?:string;
+  sourceAssetId?:string;
+  sourceSha256?:string;
+}
+export interface StudioAsset { id:string; name:string; kind:MediaKind; url?:string; text?:string; createdAt:string; origin:AssetOrigin; sha256?:string; libraryScope?:'project'|'shared'; catalog?:AssetCatalog; }
 export interface CanvasVersion { id:string; assetId:string; fingerprint:string; createdAt:string; }
 export interface CanvasNode {
   id:string; type:'studio'; position:{x:number;y:number}; selected?:boolean;
-  data:{label:string;kind:NodeKind;prompt:string;assetId?:string;model?:string;size?:string;duration:number;resolution:string;aspectRatio:string;seed?:number;generateAudio?:boolean;selectedVersion?:string;versions:CanvasVersion[];origin?:AssetOrigin};
+  data:{label:string;kind:NodeKind;prompt:string;assetId?:string;model?:string;size?:string;duration:number;resolution:string;aspectRatio:string;seed?:number;generateAudio?:boolean;selectedVersion?:string;versions:CanvasVersion[];origin?:AssetOrigin;assetContext?:AssetContext};
 }
 export interface CanvasEdge {id:string;source:string;target:string;sourceHandle?:string|null;targetHandle?:string|null;selected?:boolean;}
 export interface CanvasDocument {id:string;name:string;projectId:string;revision:number;nodes:CanvasNode[];edges:CanvasEdge[];viewport?:{x:number;y:number;zoom:number};updatedAt:string;}

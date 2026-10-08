@@ -117,7 +117,7 @@ try {
   const initialized = await request(1,'initialize',{protocolVersion:'2025-03-26'});
   if (initialized.error) throw new Error(JSON.stringify(initialized.error));
   const tools = await request(2,'tools/list');
-  const expectedTools=['list_projects','create_project','archive_project','restore_project','create_canvas','clone_canvas_to_project','list_assets','import_local_asset','update_canvas_node','add_canvas_node','connect_canvas_nodes','attach_canvas_asset','get_public_prices','list_canvases','get_canvas','get_task_status','run_canvas_node'];
+  const expectedTools=['list_projects','create_project','archive_project','restore_project','create_canvas','clone_canvas_to_project','list_assets','list_shared_assets','import_local_asset','update_asset_catalog','promote_asset_to_shared','reference_shared_asset','update_canvas_node','add_canvas_node','connect_canvas_nodes','attach_canvas_asset','get_public_prices','list_canvases','get_canvas','get_task_status','run_canvas_node'];
   for (const name of expectedTools) if (!tools.result?.tools?.some(tool => tool.name === name)) throw new Error(`MCP tool unavailable: ${name}`);
   if (tools.result?.tools?.length !== expectedTools.length) throw new Error(`Unexpected MCP tool count: ${tools.result?.tools?.length}`);
 
@@ -174,7 +174,7 @@ try {
   const secondName = JSON.parse(second.result?.content?.[0]?.text ?? '{}').canvases?.[0]?.name;
   if (secondName !== 'after-restart') throw new Error(`MCP retained a stale session: ${secondName}; ${stderr}`);
 
-  console.log(`MCP full smoke passed: ${expectedTools.length} tools invoked against an isolated service; desktop session changed without restarting MCP.`);
+  console.log(`MCP full smoke passed: ${expectedTools.length} tools enumerated; legacy operations invoked against an isolated service; desktop session changed without restarting MCP.`);
 } finally {
   child?.kill();
   for (const server of servers) await new Promise(resolve => server.close(resolve));

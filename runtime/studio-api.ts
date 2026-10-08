@@ -23,7 +23,7 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
       if(req.method==='GET'&&path==='/api/studio/state'){
         const projectId=url.searchParams.get('projectId'),canvases=engine.store.list<CanvasDocument>('canvas').filter(c=>!projectId||c.projectId===projectId);
         const ids=new Set(canvases.map(c=>c.id));
-        json({projects:engine.store.projects(),archivedProjects:engine.store.archivedProjects(),canvases,assets:engine.store.assets().filter(a=>!projectId||a.origin.projectId===projectId),tasks:engine.store.list<CanvasTask>('canvas-task').filter(t=>!projectId||ids.has(t.canvasId)).slice(0,200)});return;
+        json({projects:engine.store.projects(),archivedProjects:engine.store.archivedProjects(),canvases,assets:engine.store.assets().filter(a=>!projectId||(a.libraryScope!=='shared'&&a.origin.projectId===projectId)),tasks:engine.store.list<CanvasTask>('canvas-task').filter(t=>!projectId||ids.has(t.canvasId)).slice(0,200)});return;
       }
       if(req.method==='GET'&&path.startsWith('/api/studio/export/')){const bytes=await exportCanvas(engine,path.split('/').at(-1)!);res.writeHead(200,{'content-type':'application/zip','content-disposition':'attachment; filename="CanvDoAI-canvas.zip"'});res.end(bytes);return;}
       if(!['POST','PUT'].includes(req.method||'')){json({message:'接口不存在'},404);return;}
@@ -54,6 +54,20 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
       if(path==='/api/studio/project/restore'){
         if(input.confirmRestore!==true||typeof input.projectId!=='string')throw Error('请确认要恢复的项目');
         json(engine.store.restoreProject(input.projectId));return;
+      }
+      if(path==='/api/studio/asset/catalog'){
+        if(typeof input.assetId!=='string'||typeof input.projectId!=='string')throw Error('请提供素材 ID 和项目 ID');
+        if(input.catalog?.reviewStatus==='approved'&&input.confirmReview!==true)throw Error('标记审核通过前须由用户确认实际审核结果');
+        if(input.catalog?.reuseAllowed===true&&input.confirmReuse!==true)throw Error('跨项目复用前须由用户确认使用权与授权依据');
+        json(engine.store.updateAssetCatalog(input.assetId,input.projectId,input.catalog));return;
+      }
+      if(path==='/api/studio/asset/promote'){
+        if(input.confirmShare!==true||typeof input.assetId!=='string'||typeof input.projectId!=='string')throw Error('加入总库须明确确认素材和项目');
+        json(engine.store.promoteAsset(input.assetId,input.projectId),201);return;
+      }
+      if(path==='/api/studio/asset/reference'){
+        if(typeof input.sharedAssetId!=='string'||typeof input.targetProjectId!=='string')throw Error('请提供总库素材和目标项目');
+        json(engine.store.referenceSharedAsset(input.sharedAssetId,input.targetProjectId),201);return;
       }
       if(path==='/api/studio/canvas/create'){
         if(typeof input.projectId!=='string'||!engine.store.projects().some(project=>project.id===input.projectId))throw Error('项目不存在，请先新建或选择项目');

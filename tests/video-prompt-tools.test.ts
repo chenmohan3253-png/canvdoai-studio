@@ -8,6 +8,15 @@ describe('视频提示词额度工具',()=>{
     expect(usage.submitted).toBe(usage.content+VIDEO_PROMPT_SUFFIX);
     expect(usage.used).toBe(usage.submitted.length);
     expect(usage.overBy).toBe(Math.max(0,usage.used-40));
+    expect(usage.nodeChars+usage.upstreamChars+usage.separatorChars+usage.suffixChars).toBe(usage.used);
+  });
+
+  it('Wan 能力目录报告 5000 字符时允许 4800 字符正文，4500 不是软件固定上限',()=>{
+    const usage=videoPromptUsage('镜'.repeat(4800),[],5000);
+    expect(usage.suffixChars).toBe(35);
+    expect(usage.used).toBe(4835);
+    expect(usage.overBy).toBe(0);
+    expect(videoPromptUsage('镜'.repeat(4800),[],4500).overBy).toBe(335);
   });
 
   it('安全压缩只清理重复行和平台已经附加的约束',()=>{
