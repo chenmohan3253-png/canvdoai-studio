@@ -1,4 +1,4 @@
-# 分层素材库与 Codex MCP 操作（v1.1.15）
+# 分层素材库与 Codex MCP 操作（v1.1.16）
 
 ## 库的边界
 
@@ -22,7 +22,7 @@
 5. `update_canvas_node` 或 `add_canvas_node` 在目标图片/视频节点设置 `assetContext`，例如 `{"episodeId":"E001","shotId":"S01","characterIds":["C01","C02"]}`，再 `attach_canvas_asset` 使用**目标项目的** `assetId`。不匹配时先核实素材，不能随意改标签绕过门禁。
 6. `get_canvas` 与 `list_assets` 再核对节点、来源及所选版本。只有用户另行明确授权本次 API 费用，才调用 `run_canvas_node(confirmCost:true)`；引用、标注、挂载本身不产生生成费用。
 
-已有 Codex 聊天可能缓存旧 MCP 工具目录。安装 v1.1.15 并重新打开软件后，新建 Codex 聊天或重载 MCP 连接，再先只读调用 `list_projects`、`list_shared_assets`、`list_assets` 验证。仅看到工具名不代表连接成功；须取得真实返回。不要把 API Key、桌面会话令牌或客户素材写入 Codex 配置及 Git 仓库。
+已有 Codex 聊天可能缓存旧 MCP 工具目录。安装 v1.1.16 并重新打开软件后，新建 Codex 聊天或重载 MCP 连接，再先只读调用 `list_projects`、`list_shared_assets`、`list_assets` 验证。仅看到工具名不代表连接成功；须取得真实返回。不要把 API Key、桌面会话令牌或客户素材写入 Codex 配置及 Git 仓库。
 
 ## 边界
 

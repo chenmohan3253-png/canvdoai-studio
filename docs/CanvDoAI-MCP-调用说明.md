@@ -1,10 +1,10 @@
-# CanvDoAI Studio MCP 调用说明（Windows，v1.1.15）
+# CanvDoAI Studio MCP 调用说明（Windows，v1.1.16）
 
 这份说明用于让同一台电脑上的其他 Codex 项目或聊天操作已安装的 CanvDoAI Studio。MCP 是**本机创作画布控制接口**，不是云端 API，也不等于全平台每个页面都已开放 MCP。Codex 与桌面软件须在同一 Windows 用户会话中运行。
 
 ## 1. 先决条件
 
-1. 安装并打开 CanvDoAI Studio v1.1.15，使用期间保持软件运行。
+1. 安装并打开 CanvDoAI Studio v1.1.16，使用期间保持软件运行。
 2. 软件内按需配置有效的文字、图片、视频 API；仅查看项目、编辑画布、导入本机素材不需要生成 API 额度。
 3. 在 Codex 的用户级 `config.toml` 中只配置一次 MCP。**同一台电脑的其他 Codex 项目会共用此配置，不需要把软件或项目文件复制过去。**
 4. 不要把 API Key、会话令牌或客户素材写进 `config.toml`、聊天提示词、Git 仓库或本说明。
