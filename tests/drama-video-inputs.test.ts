@@ -48,6 +48,34 @@ describe('remake video input contracts',()=>{
     expect(runtime.createJobInput(b,s).idempotency_key).not.toBe(original);
     expect(original).toMatch(/^dramaforge-media-[a-f0-9]{48}$/);
   });
+  it.each([true,false])('keeps the full confirmed 15000-character prompt including policy text (explicit inputs: %s)',explicit=>{
+    vi.stubEnv('VIDEO_PROMPT_LIMIT_OVERRIDES',JSON.stringify({'https://provider.test':{'seedance-test':15000}}));
+    const b=batch(),s=b.segments[0];if(explicit)s.video_inputs=frames();
+    s.prompt='';
+    const suffix=runtime.createJobInput(b,s,asset(3,'video')).prompt.length;
+    s.prompt='镜'.repeat(15000-suffix);
+    const input=runtime.createJobInput(b,s,asset(3,'video'),2500);
+    expect(input.prompt).toHaveLength(15000);expect(input.prompt.endsWith(s.prompt)).toBe(true);
+    s.prompt+='镜';expect(()=>runtime.createJobInput(b,s,asset(3,'video'),2500)).toThrow('15001');
+    expect(s.prompt).toHaveLength(15001-suffix);
+  });
+  it('does not let a confirmed limit spill into another route or replace a current catalog limit',()=>{
+    vi.stubEnv('VIDEO_PROMPT_LIMIT_OVERRIDES',JSON.stringify({'https://other.test':{'seedance-test':15000}}));
+    const b=batch(),s=b.segments[0];s.video_inputs=frames();s.prompt='镜'.repeat(3000);
+    expect(()=>runtime.createJobInput(b,s,undefined,2500)).toThrow('2500');
+    expect(runtime.createJobInput(b,s).prompt.length).toBeGreaterThan(3000);
+    s.prompt='镜'.repeat(5000);expect(()=>runtime.createJobInput(b,s)).toThrow('5000');
+  });
+  it('blocks excessive final prompts before legacy media slicing and upload on generate and retry',async()=>{
+    const b=batch();b.segments[0].prompt='镜'.repeat(5000);
+    await store.createDramaBatchRecord(b);
+    await expect(runtime.generateProductionBatch(request({confirm_cost:true}),b.id)).rejects.toThrow('5000');
+    expect(calls.every(url=>url.endsWith('/v1/providers/capabilities'))).toBe(true);
+    b.segments[0].job_status='failed';await store.saveDramaBatchRecord({teamId:'team-1',userId:'user-1',projectId:'project-1'},b);
+    const retried=await runtime.retryProductionSegment(request({confirm_cost:true}),b.id,b.segments[0].id);
+    expect(retried.segments[0].failure?.category).toBe('validation_error');
+    expect(calls.every(url=>url.endsWith('/v1/providers/capabilities'))).toBe(true);
+  });
   it('persists ordered configuration across SQLite close/reopen without creating or slicing video',async()=>{
     await store.createDramaBatchRecord(batch());
     const result=await runtime.updateProductionVideoInputs(request(frames()),'batch-1','segment-1');

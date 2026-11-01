@@ -3,8 +3,9 @@ import {afterEach,describe,expect,it,vi} from 'vitest';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve,sep,basename} from 'node:path';
-import {persistentVideoJob,readVideoJobResult,ProviderPendingError,type VideoJobOptions} from '../runtime/provider-tasks';
+import {persistentVideoJob,readVideoJobResult,ProviderPendingError,savedProviderTask,type VideoJobOptions} from '../runtime/provider-tasks';
 import {ResultDownloadError} from '../runtime/result-download';
+import {ProviderHttpError,parseProviderHttpError} from '../runtime/provider-http-error';
 import {StudioStore} from '../runtime/studio-store';
 const directories:string[]=[];
 function fixture(){const directory=mkdtempSync(join(tmpdir(),'canvdoai-provider-test-'));directories.push(directory);return {directory,key:'fixture-key',account:'fixture-account',intervalMs:1,create:vi.fn(async()=>({id:'job-1',status:'succeeded',result_url:'https://example.invalid/old'})),poll:vi.fn(async()=>({id:'job-1',status:'succeeded',result_url:'https://example.invalid/fresh'}))};}
@@ -23,4 +24,55 @@ describe('云端已成功结果恢复',()=>{
   it('超时恢复继续查询，不重复创建',async()=>{const opt:VideoJobOptions=fixture();const create=vi.fn(async()=>({id:'queued-1',status:'queued'}));opt.create=create;opt.poll=vi.fn(async()=>({id:'queued-1',status:'succeeded',result_url:'https://example.invalid/fresh'}));await expect(persistentVideoJob({...opt,deadlineMs:-1})).rejects.toThrow('不会重新提交');await persistentVideoJob(opt);expect(create).toHaveBeenCalledOnce();});
   it('提交结果未知不自动补单',async()=>{const opt=fixture();opt.create.mockRejectedValueOnce(Error('lost'));await expect(persistentVideoJob(opt)).rejects.toThrow();await expect(persistentVideoJob(opt)).rejects.toThrow('结果未知');expect(opt.create).toHaveBeenCalledOnce();});
   it('网站回执待确认只保留原ID续查，不当作已确认失败或再次提交',async()=>{const opt=fixture();opt.create.mockResolvedValueOnce({id:'job-1',status:'manual_review',result_url:''});await expect(persistentVideoJob(opt)).rejects.toThrow('回执待核对');await persistentVideoJob({...opt,refreshOnly:true});expect(opt.poll).toHaveBeenCalledWith('job-1');expect(opt.create).toHaveBeenCalledOnce();});
+});
+
+describe('明确拒绝与未知提交分别保留',()=>{
+  it.each([400,401,403,404,405,413,415,422])('HTTP %s 保存拒绝证据，同键重调不再提交',async status=>{
+    const opt=fixture();
+    const error=new ProviderHttpError({status,path:'/v1/video-jobs',requestId:'fixture-request',message:'prompt too long',detail:{max_length:15000}});
+    opt.create.mockRejectedValueOnce(error);
+    await expect(persistentVideoJob(opt)).rejects.toBe(error);
+    expect(savedProviderTask(opt.directory,opt.key)).toMatchObject({state:'REJECTED',error:{status,path:'/v1/video-jobs',requestId:'fixture-request',detail:{max_length:15000}}});
+    await expect(persistentVideoJob(opt)).rejects.toThrow('prompt too long');
+    await expect(persistentVideoJob({...opt,refreshOnly:true})).rejects.toBeInstanceOf(ProviderHttpError);
+    expect(opt.create).toHaveBeenCalledOnce();expect(opt.poll).not.toHaveBeenCalled();
+  });
+  it.each([408,409,429,500,502,503,504])('HTTP %s 仍为 UNKNOWN，不能自动重投',async status=>{
+    const opt=fixture();opt.create.mockRejectedValueOnce(new ProviderHttpError({status,path:'/v1/video-jobs',message:'ambiguous response'}));
+    await expect(persistentVideoJob(opt)).rejects.toThrow();
+    expect(savedProviderTask(opt.directory,opt.key)).toMatchObject({state:'UNKNOWN',error:{status}});
+    await expect(persistentVideoJob(opt)).rejects.toThrow('结果未知');expect(opt.create).toHaveBeenCalledOnce();
+  });
+  it('成功响应无 ID 和纯文字 HTTP 400 错误不当成明确拒绝',async()=>{
+    for(const failure of [undefined,Error('HTTP 400 invalid input')]){
+      const opt=fixture();if(failure)opt.create.mockRejectedValueOnce(failure);else opt.create.mockResolvedValueOnce({id:'',status:'succeeded',result_url:''});
+      await expect(persistentVideoJob(opt)).rejects.toThrow();expect(savedProviderTask(opt.directory,opt.key)?.state).toBe('UNKNOWN');
+      await expect(persistentVideoJob(opt)).rejects.toThrow('结果未知');expect(opt.create).toHaveBeenCalledOnce();
+    }
+  });
+  it('既存 UNKNOWN 不按旧错误文本解锁，也不能借新账户重投',async()=>{
+    const opt=fixture(),store=new StudioStore(opt.directory);
+    store.put('provider-task',opt.key,{key:opt.key,account:opt.account,state:'UNKNOWN',updatedAt:'old',error:{status:400,path:'/v1/videos',message:'old HTTP 400'}});store.close();
+    await expect(persistentVideoJob(opt)).rejects.toThrow('结果未知');
+    await expect(persistentVideoJob({...opt,account:'different-account'})).rejects.toThrow('原API账户');expect(opt.create).not.toHaveBeenCalled();
+  });
+  it('持久化拒绝只保存脱敏证据，不保存输入正文或密钥',async()=>{
+    const opt=fixture(),secret='fixture-private-key-12345',prompt='private production prompt fixture';
+    const error=await parseProviderHttpError(Response.json({message:'invalid '+prompt,detail:{input:prompt,api_key:secret},errors:[{message:'max 15000'}]},{status:422}),'/v1/videos',{secrets:[secret],requestBody:{prompt}});
+    opt.create.mockRejectedValueOnce(error);await expect(persistentVideoJob(opt)).rejects.toThrow('15000');
+    const saved=JSON.stringify(savedProviderTask(opt.directory,opt.key));expect(saved).not.toContain(secret);expect(saved).not.toContain(prompt);expect(saved).toContain('15000');
+  });
+  it('已取得任务 ID 后查询 4xx 仍保留原任务，只续查不重投',async()=>{
+    const opt=fixture();opt.create.mockResolvedValueOnce({id:'job-1',status:'processing',result_url:''});
+    opt.poll.mockRejectedValueOnce(new ProviderHttpError({status:404,path:'/v1/videos/job-1',message:'temporarily missing'}));
+    await expect(persistentVideoJob(opt)).rejects.toBeInstanceOf(ProviderPendingError);
+    expect(savedProviderTask(opt.directory,opt.key)).toMatchObject({state:'REMOTE',job:{id:'job-1'}});
+    await persistentVideoJob(opt);expect(opt.create).toHaveBeenCalledOnce();
+  });
+  it('新键显式重试不删除原拒绝证据',async()=>{
+    const opt=fixture();opt.create.mockRejectedValueOnce(new ProviderHttpError({status:422,path:'/v1/videos',message:'invalid'}));
+    await expect(persistentVideoJob(opt)).rejects.toThrow();
+    await persistentVideoJob({...opt,key:'explicit-new-attempt'});
+    expect(opt.create).toHaveBeenCalledTimes(2);expect(savedProviderTask(opt.directory,opt.key)?.state).toBe('REJECTED');
+  });
 });

@@ -1,6 +1,7 @@
 const DEFAULT_BASE_URL = "https://dispatch.example.com";
 import {videoGatewayFetch,fuliuSpec} from '../../../runtime/fuliu-adapter';
 import {isHiggsfieldUnlimitedModel} from './seedance-catalog';
+import {resolveVideoPromptLimit} from '../../../runtime/video-prompt-limits';
 
 export type DispatchCapability =
   | "text_to_video"
@@ -38,16 +39,24 @@ export interface CreateVideoJobInput {
   use_unlim?: boolean;
 }
 
-export function enforceDramaForgeSeedancePolicy(input: CreateVideoJobInput) {
+export function validateDramaVideoPrompt(prompt: unknown, model: string, catalogPromptLimit?: unknown) {
+  const {limit} = resolveVideoPromptLimit({
+    videoBase:process.env.DISPATCH_API_BASE_URL || DEFAULT_BASE_URL,
+    videoPromptLimitOverrides:process.env.VIDEO_PROMPT_LIMIT_OVERRIDES || '{}',
+  },{model,prompt_max_chars:catalogPromptLimit});
+  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > limit) {
+    throw new DispatchValidationError(`最终视频提示词必须为 1–${limit} 个字符，当前为 ${typeof prompt === 'string' ? prompt.length : 0}（含附加规则）；请调整内容或确认接口上限，不会自动截断。`);
+  }
+}
+
+export function enforceDramaForgeSeedancePolicy(input: CreateVideoJobInput, catalogPromptLimit?: unknown) {
   if (!input || typeof input !== "object") {
     throw new DispatchValidationError("任务参数格式不正确");
   }
   if (!input.idempotency_key?.trim()) {
     throw new DispatchValidationError("缺少幂等键 idempotency_key");
   }
-  if (!input.prompt?.trim() || input.prompt.length > 5000) {
-    throw new DispatchValidationError("提示词必须为 1–5000 个字符");
-  }
+  validateDramaVideoPrompt(input.prompt,input.model,catalogPromptLimit);
   if (!input.model?.trim()) {
     throw new DispatchValidationError("缺少 Seedance 模型名称");
   }

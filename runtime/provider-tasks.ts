@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
 import {StudioStore} from './studio-store';
 import {ResultDownloadError} from './result-download';
+import {ProviderHttpError,isDefiniteProviderRejection,type ProviderHttpErrorEvidence} from './provider-http-error';
 export interface RemoteJob {id?:string;model?:string;status?:string;result_url?:string|null;failure?:{message?:string;category?:string}|null;}
-export interface ProviderIntent {key:string;account:string;state:string;job?:RemoteJob;updatedAt:string;}
+export interface ProviderIntent {key:string;account:string;state:string;job?:RemoteJob;error?:ProviderHttpErrorEvidence;updatedAt:string;}
 type Intent=ProviderIntent;
 export class ProviderPendingError extends Error {
   constructor(readonly providerKey:string,readonly remoteId:string,detail='远端仍在运行'){
@@ -43,6 +44,11 @@ export async function persistentVideoJob(options:VideoJobOptions):Promise<Remote
       let record=store.get<Intent>('provider-task',options.key);
       const resumed=Boolean(record?.job?.id);
       if(record&&record.account!==options.account)throw Error('该在途任务属于原API账户，请恢复原接口配置；不会向新账户重复提交');
+      if(record?.state==='REJECTED'){
+        const suffix='原拒绝记录及幂等键已保留，只有明确重新生成并使用新幂等键才可重试；不会自动提交';
+        if(record.error)throw new ProviderHttpError({...record.error,message:record.error.message+'；'+suffix});
+        throw Error('服务商已明确拒绝原请求；'+suffix);
+      }
       if(record?.state==='UNKNOWN'||(record?.state==='SUBMITTING'&&!record.job?.id))throw Error('远端提交结果未知，已保留幂等键。请先在服务商后台确认/关联任务ID，禁止盲目重新扣费');
       if(record?.state==='FAILED'){
         const detail=record.job?.failure?.message||record.job?.status||'服务商未返回明确失败原因';
@@ -62,7 +68,7 @@ export async function persistentVideoJob(options:VideoJobOptions):Promise<Remote
       if(!record){
         record={key:options.key,account:options.account,state:'SUBMITTING',updatedAt:''};save(record);
         try{const job=await options.create();if(!job.id)throw Error('服务商未返回任务ID');record.job=job;record.state='REMOTE';save(record);}
-        catch(e){record.state='UNKNOWN';save(record);throw e;}
+        catch(e){record.state=isDefiniteProviderRejection(e)?'REJECTED':'UNKNOWN';if(e instanceof ProviderHttpError)record.error=e.evidence;save(record);throw e;}
         options.onRemote?.(record.job!);
       }
       if(resumed&&record.state==='REMOTE'){

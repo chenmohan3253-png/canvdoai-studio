@@ -1,6 +1,6 @@
 import { randomUUID,createHash } from "node:crypto";
 import { archiveGeneratedVideo } from './desktop-archive';
-import { dispatchFetch, enforceDramaForgeSeedancePolicy, type CreateVideoJobInput } from "./dispatch";
+import { dispatchFetch, enforceDramaForgeSeedancePolicy, validateDramaVideoPrompt, DispatchValidationError, type CreateVideoJobInput } from "./dispatch";
 import { estimateSeedancePoints, SNAPSHOT_SEEDANCE_MODELS,isHiggsfieldUnlimitedModel } from "./seedance-catalog";
 import { createDramaBatchRecord, DramaStoreAccessError, emptyDramaAnalysis, getDramaBatchRecord, listDramaBatchRecords, requestIdentity, saveDramaBatchRecord } from "./drama-store";
 import { DRAMA_LANGUAGES, DRAMA_RIGHTS_STATEMENT_VERSION, DRAMA_TARGETS, formatDramaDuration, isTerminalJobStatus, type DramaBatch, type DramaLanguage, type DramaReviewStatus, type DramaStoryboardAssets, type DramaTargetType } from "./drama-production";
@@ -42,6 +42,9 @@ export function dramaErrorResponse(error: unknown) {
   }
   if (error instanceof DramaProductionError) {
     return Response.json({ error: { category: error.category, message: error.message } }, { status: error.status });
+  }
+  if (error instanceof DispatchValidationError) {
+    return Response.json({ error: { category: 'validation_error', message: error.message } }, { status: 400 });
   }
   const message = error instanceof Error ? error.message : "短剧生产服务暂时不可用";
   return Response.json({ error: { category: "internal", message } }, { status: 500 });
@@ -324,7 +327,7 @@ export async function updateProductionPlan(request: Request, batchId: string) {
       `视觉规则：${blueprint.visual_rules.join("；")}`,
       `声音与对白规则：${blueprint.dialogue_rules.join("；")}`,
       `连续性规则：${blueprint.continuity_rules.join("；")}`,
-    ].join("\n").slice(0, 4900);
+    ].join("\n");
     return {
       ...segment,
       title: `${beat.title} · ${String(sequenceInBeat).padStart(2, "0")}`.slice(0, 120),
@@ -569,7 +572,11 @@ function subtitleCuesForBatch(batch: DramaBatch) {
   });
 }
 
-export function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"][number], sourceAsset?: DispatchAsset): CreateVideoJobInput {
+function productionVideoPrompt(segment: DramaBatch["segments"][number]) {
+  return ['硬性出图规则：画面内不得生成字幕、标题、文字、UI、水印或平台标识；对白只进入音轨，底部字幕由拼接服务统一生成。',segment.prompt].join('\n');
+}
+
+export function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"][number], sourceAsset?: DispatchAsset, catalogPromptLimit?: unknown): CreateVideoJobInput {
   if (!segment.storyboard_asset || segment.storyboard_asset.kind !== "image" || segment.storyboard_review_status !== "approved") {
     throw new DramaProductionError("必须先生成并通过当前片段的分镜图审查");
   }
@@ -578,10 +585,10 @@ export function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"
     const digest=createHash('sha256').update(JSON.stringify({team:batch.team_id,batch:batch.id,segment:segment.id,revision:segment.revision,model:batch.model,prompt:segment.prompt,seconds:segment.duration_seconds,ratio:batch.aspect_ratio,resolution:batch.resolution,capability:dramaVideoCapability(inputs),assets:inputs.assets.map(a=>({key:a.object_key,sha256:a.sha256,kind:a.kind,role:a.role,order:a.order}))})).digest('hex').slice(0,48);
     return enforceDramaForgeSeedancePolicy({
       idempotency_key:'dramaforge-media-'+digest,
-      model:batch.model,capability:dramaVideoCapability(inputs),prompt:['硬性出图规则：画面内不得生成字幕、标题、文字、UI、水印或平台标识；对白只进入音轨，底部字幕由拼接服务统一生成。',segment.prompt].join('\n').slice(0,5000),
+      model:batch.model,capability:dramaVideoCapability(inputs),prompt:productionVideoPrompt(segment),
       parameters:{duration_seconds:segment.duration_seconds,aspect_ratio:batch.aspect_ratio,resolution:batch.resolution,generate_audio:true},
       assets:inputs.assets.map(asset=>({object_key:asset.object_key,cdn_url:asset.cdn_url,sha256:asset.sha256,mime_type:asset.mime_type,kind:asset.kind,role:asset.role,order:asset.order})),allow_fallback:false,
-    });
+    },catalogPromptLimit);
   }
   if(!sourceAsset)throw new DramaProductionError('缺少已准备的源片段');
   const approvedReferences = batch.reference_assets.filter((asset) => asset.review_status === "approved").slice(0, 10);
@@ -589,10 +596,7 @@ export function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"
     idempotency_key: `dramaforge-${batch.team_id}-${batch.id}-${segment.id}-r${segment.revision}`.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 120),
     model: batch.model,
     capability: "multi_reference",
-    prompt: [
-      "硬性出图规则：画面内不得生成字幕、标题、文字、UI、水印或平台标识；对白只进入音轨，底部字幕由拼接服务统一生成。",
-      segment.prompt,
-    ].join("\n").slice(0, 5000),
+    prompt: productionVideoPrompt(segment),
     parameters: {
       duration_seconds: segment.duration_seconds,
       aspect_ratio: batch.aspect_ratio,
@@ -625,22 +629,27 @@ export function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"
       order: index + 2,
     }))],
     allow_fallback: false,
-  });
+  },catalogPromptLimit);
 }
 
 async function submitSegment(batch: DramaBatch, segment: DramaBatch["segments"][number]) {
   let sourceAsset: DispatchAsset|undefined;
+  let model: SeedanceCatalogModel | undefined;
   try {
+    model = (await currentSeedanceModels()).find(item => item.model === batch.model);
+    if (!model) throw new DramaProductionError('当前模型已不可用，请刷新模型目录');
+    // Validate the final text before the source is sliced or uploaded, also on retries.
+    validateDramaVideoPrompt(productionVideoPrompt(segment),batch.model,model.prompt_max_chars);
     if(!segment.video_inputs)sourceAsset = await prepareSegmentSourceAsset(batch, segment);
   } catch (error) {
     segment.job_status = "failed";
     segment.failure = {
-      category: error instanceof DramaProductionError ? error.category : "media_preparation_failed",
+      category: error instanceof DispatchValidationError ? 'validation_error' : error instanceof DramaProductionError ? error.category : "media_preparation_failed",
       message: error instanceof Error ? error.message : "源片段准备失败",
     };
     return false;
   }
-  const result = await dispatchFetch("/v1/video-jobs", { method: "POST", body: JSON.stringify(createJobInput(batch, segment, sourceAsset)) });
+  const result = await dispatchFetch("/v1/video-jobs", { method: "POST", body: JSON.stringify(createJobInput(batch, segment, sourceAsset, model?.prompt_max_chars)) });
   if (result.status < 200 || result.status >= 300) {
     const error = (result.payload as { error?: { category?: string; message?: string } })?.error;
     segment.job_status = "failed";
@@ -687,6 +696,7 @@ export async function generateProductionBatch(request: Request, batchId: string)
   const maxJobs = Math.max(1, Math.min(5, Math.floor(body.max_jobs || 3)));
   const candidates = batch.segments.filter((segment) => segment.storyboard_review_status === "approved" && !segment.job_id).slice(0, maxJobs);
   if (!candidates.length) throw new DramaProductionError("没有已通过分镜图审查且尚未提交的视频片段");
+  for (const segment of candidates) validateDramaVideoPrompt(productionVideoPrompt(segment),batch.model,model.prompt_max_chars);
   const now = new Date().toISOString();
   for (const segment of candidates) {
     await submitSegment(batch, segment);

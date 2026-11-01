@@ -21,6 +21,7 @@ export function configureDramaRuntime(config: Record<string,string>) {
     TRANSCRIPTION_API_BASE:config.transcriptionBase, TRANSCRIPTION_API_KEY:config.transcriptionKey,
     CHATGPT_TRANSCRIPTION_MODEL:config.transcriptionModel,
     DISPATCH_API_BASE_URL:config.videoBase, DISPATCH_API_KEY:config.videoKey,
+    VIDEO_PROMPT_LIMIT_OVERRIDES:config.videoPromptLimitOverrides||'{}',
     VIDEO_API_PROTOCOL:config.videoProtocol||'dispatch',ASSET_UPLOAD_BASE:config.assetUploadBase,ASSET_UPLOAD_KEY:config.assetUploadKey,
     ALLOW_INSECURE_DISPATCH:String(config.videoBase?.startsWith('http://') ?? false),
     ALLOW_INSECURE_CHATGPT:String([config.chatBase,config.imageBase,config.transcriptionBase].some(b=>b?.startsWith('http://'))),

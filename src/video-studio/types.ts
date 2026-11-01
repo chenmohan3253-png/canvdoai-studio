@@ -113,6 +113,8 @@ export interface VideoModelOption {
   durationMax?: number;
   maxReferenceAssets?: number;
   promptMaxChars?: number;
+  catalogReportedPromptLimit?: number | null;
+  promptLimitBasis?: 'USER_CONFIRMED_PROVIDER_LIMIT' | 'ROUTE_CATALOG' | 'DEFAULT_FALLBACK';
   relativeCost?: number;
   recommended?: boolean;
   priceNote?: string;
@@ -483,6 +485,8 @@ export interface VideoProviderModel {
   aspectRatios: string[];
   maxReferenceAssets?: number;
   promptMaxChars?: number;
+  catalogReportedPromptLimit?: number | null;
+  promptLimitBasis?: 'USER_CONFIRMED_PROVIDER_LIMIT' | 'ROUTE_CATALOG' | 'DEFAULT_FALLBACK';
   relativeCost?: number;
   priceNote?: string;
   pricing?: VideoProviderPricing;

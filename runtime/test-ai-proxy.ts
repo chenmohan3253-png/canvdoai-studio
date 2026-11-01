@@ -16,6 +16,8 @@ import {resolveGeneratedFile,concatFileEntry} from './local-media';
 import {videoAssetReceipt} from './video-asset-receipt';
 import {planShotVideoInputs,ShotVideoInputError} from '../src/video-studio/shot-video-inputs';
 import {extractVideoLastFrame} from './video-last-frame';
+import {resolveVideoPromptLimit, type ResolvedVideoPromptLimit} from './video-prompt-limits';
+import {parseProviderHttpError,ProviderHttpError} from './provider-http-error';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_BASE_URL = "https://api.example.com/v1";
@@ -91,6 +93,9 @@ interface DispatchModel {
   aspectRatios: string[];
   maxReferenceAssets?: number;
   promptMaxChars?: number;
+  catalogReportedPromptLimit?: number | null;
+  promptLimitBasis?: ResolvedVideoPromptLimit['basis'];
+  localPromptLimitOverride?: ResolvedVideoPromptLimit['localPromptLimitOverride'];
   relativeCost?: number;
   priceNote?: string;
   pricing?: {
@@ -145,16 +150,11 @@ async function dispatchRequest(path: string, apiKey: string, init: RequestInit =
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
-    let category = "upstream_error";
-    let message = `视频服务返回 HTTP ${response.status}`;
-    try {
-      const payload = await response.json() as { error?: { category?: unknown; message?: unknown } };
-      category = sanitizedProviderText(payload.error?.category, category);
-      message = sanitizedProviderText(payload.error?.message, message);
-    } catch {
-      // Keep the sanitized status-only message.
+    let requestBody: unknown;
+    if (typeof init.body === 'string') {
+      try { requestBody = JSON.parse(init.body); } catch { requestBody = init.body; }
     }
-    throw new Error(`DISPATCH_HTTP_${response.status}:${category}:${message}`);
+    throw await parseProviderHttpError(response,path,{secrets:[apiKey,videoConfig.assetUploadKey].filter(Boolean),requestBody});
   }
   return response;
 }
@@ -179,6 +179,7 @@ async function loadDispatchSession(apiKey: string): Promise<DispatchSession> {
   const usage = await usageResponse.json() as { quota_points?: unknown; used_points?: unknown; remaining_points?: unknown };
   const models: DispatchModel[] = (capabilities.models ?? []).flatMap((model) => {
     if (typeof model.model !== "string" || !Array.isArray(model.capabilities) || !Array.isArray(model.resolutions) || !Array.isArray(model.aspect_ratios)) return [];
+    const promptLimit = resolveVideoPromptLimit({...videoConfig,videoBase:DISPATCH_BASE_URL},{model:model.model,prompt_max_chars:model.prompt_max_chars});
     const pricing = model.pricing && typeof model.pricing.base_points_per_second === "number"
       && model.pricing.multipliers?.resolution && typeof model.pricing.multipliers.resolution === "object"
       && model.pricing.multipliers.aspect_ratio && typeof model.pricing.multipliers.aspect_ratio === "object"
@@ -197,7 +198,10 @@ async function loadDispatchSession(apiKey: string): Promise<DispatchSession> {
       durationMax: safeNumber(model.duration_max, 15, 1, 60),
       aspectRatios: model.aspect_ratios.filter((item): item is string => typeof item === "string"),
       maxReferenceAssets: typeof model.max_reference_assets === "number" ? model.max_reference_assets : undefined,
-      promptMaxChars: typeof model.prompt_max_chars === "number" ? model.prompt_max_chars : undefined,
+      promptMaxChars: promptLimit.limit,
+      catalogReportedPromptLimit: promptLimit.catalogReportedPromptLimit,
+      promptLimitBasis: promptLimit.basis,
+      localPromptLimitOverride: promptLimit.localPromptLimitOverride,
       relativeCost: typeof model.relative_cost === "number" ? model.relative_cost : undefined,
       priceNote: typeof model.price_note === "string" ? model.price_note : undefined,
       pricing,
@@ -255,6 +259,11 @@ function safeText(value: unknown, max = 2000) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
+// Production prompt fields must remain intact; validate the assembled prompt instead.
+function promptText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function contentReviewSafeText(value: string) {
   return value
     .replace(/攻击头部和肋部/g, "向对方上身方向做连续演练动作")
@@ -305,7 +314,7 @@ function assText(value: string) {
 }
 
 function speechCuesForShot(shot: JsonRecord) {
-  return normalizeSpeechCues(shot.speechCues, safeText(shot.dialogue, 1600));
+  return normalizeSpeechCues(shot.speechCues, promptText(shot.dialogue));
 }
 
 function subtitleCueTimeline(shots: JsonRecord[], clips: JsonRecord[]) {
@@ -427,6 +436,28 @@ async function generateDispatchVideo(options: {
   if (!resolution || !aspectRatio) throw new Error("DISPATCH_MODEL_UNAVAILABLE:所选模型没有可用的分辨率或画幅。");
   const providerDuration = Math.min(model.durationMax, Math.max(model.durationMin, Math.round(options.durationSec)));
 
+  const shotId = safeText(options.shot.id, 120);
+  const requiredSpeech = speechCuesForShot(options.shot);
+  const regenerationInstruction = promptText(options.regenerationInstruction);
+  const reviewSafeRetry = regenerationInstruction.startsWith("审核优化：");
+  const imagePrompt = promptText(options.shot.imagePrompt);
+  const actionPrompt = promptText(options.shot.action);
+  const prompt = [
+    reviewSafeRetry ? contentReviewSafeText(imagePrompt) : imagePrompt,
+    reviewSafeRetry ? contentReviewSafeText(actionPrompt) : actionPrompt,
+    promptText(options.shot.camera),
+    plan.capability === 'multi_reference' ? '遵循参考素材中指定的人物形象、场景、动作和声音，保持人物身份和色彩连续一致。动作自然，镜头稳定，无文字，无字幕，无水印。'
+      : plan.capability === 'first_last_frame' ? '保持首帧人物身份、五官、发型、服装、场景布局和色彩连续一致。从指定首帧自然运动到指定尾帧，保持连续镜头。动作自然，镜头稳定，无文字，无字幕，无水印。'
+      : '保持首帧人物身份、五官、发型、服装、场景布局和色彩连续一致。动作自然，镜头稳定，无文字，无字幕，无水印。',
+    reviewSafeRetry ? "影视表演式武术演练，双方保持安全距离，只呈现闪避、架势和节奏变化，不呈现伤害结果、接触特写或痛苦表现。" : "",
+    regenerationInstruction ? `本次局部重做要求：${regenerationInstruction}` : "",
+    options.generateAudio ? providerSpeechPrompt(requiredSpeech) : "",
+  ].filter(Boolean).join("。 ");
+  const promptLimit = model.promptMaxChars ?? 5000;
+  if (prompt.length > promptLimit) {
+    throw new ShotVideoInputError(`最终视频提示词为 ${prompt.length} 个字符，超过当前模型上限 ${promptLimit}（含画面、动作、运镜、对白和附加规则）；已在上传素材和提交任务前停止，请明确调整内容或确认接口上限。`);
+  }
+
   const uploadedAssets: Record<string,unknown>[] = [];
   const inputDigests: {sha256:string;kind:string;role:string;order:number}[] = [];
   const types: Record<string,string> = {png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',mp4:'video/mp4',webm:'video/webm',mov:'video/quicktime',wav:'audio/wav',mp3:'audio/mpeg',m4a:'audio/mp4',aac:'audio/aac'};
@@ -463,22 +494,6 @@ async function generateDispatchVideo(options: {
     }
   }
 
-  const shotId = safeText(options.shot.id, 120);
-  const requiredSpeech = speechCuesForShot(options.shot);
-  const reviewSafeRetry = safeText(options.regenerationInstruction, 800).startsWith("审核优化：");
-  const imagePrompt = safeText(options.shot.imagePrompt, 1600);
-  const actionPrompt = safeText(options.shot.action, 500);
-  const prompt = [
-    reviewSafeRetry ? contentReviewSafeText(imagePrompt) : imagePrompt,
-    reviewSafeRetry ? contentReviewSafeText(actionPrompt) : actionPrompt,
-    safeText(options.shot.camera, 260),
-    plan.capability === 'multi_reference' ? '遵循参考素材中指定的人物形象、场景、动作和声音，保持人物身份和色彩连续一致。动作自然，镜头稳定，无文字，无字幕，无水印。'
-      : plan.capability === 'first_last_frame' ? '保持首帧人物身份、五官、发型、服装、场景布局和色彩连续一致。从指定首帧自然运动到指定尾帧，保持连续镜头。动作自然，镜头稳定，无文字，无字幕，无水印。'
-      : '保持首帧人物身份、五官、发型、服装、场景布局和色彩连续一致。动作自然，镜头稳定，无文字，无字幕，无水印。',
-    reviewSafeRetry ? "影视表演式武术演练，双方保持安全距离，只呈现闪避、架势和节奏变化，不呈现伤害结果、接触特写或痛苦表现。" : "",
-    options.regenerationInstruction ? `本次局部重做要求：${safeText(options.regenerationInstruction, 800)}` : "",
-    options.generateAudio ? providerSpeechPrompt(requiredSpeech) : "",
-  ].filter(Boolean).join("。 ").slice(0, 3600);
   const stableInputHash = createHash("sha256").update(JSON.stringify({
     projectId: options.projectId,
     shotId,
@@ -787,8 +802,8 @@ export function registerGenerationRoutes(middlewares: Server) {
           respond(response, 200, session);
         } catch (error) {
           const requestTooLarge = error instanceof Error && error.message === "REQUEST_TOO_LARGE";
-          const unauthorized = error instanceof Error && error.message.startsWith("DISPATCH_HTTP_401:");
-          const quota = error instanceof Error && error.message.startsWith("DISPATCH_HTTP_402:");
+          const unauthorized = error instanceof ProviderHttpError && error.status === 401;
+          const quota = error instanceof ProviderHttpError && error.status === 402;
           const timedOut = error instanceof Error && error.name === "TimeoutError";
           respond(response, requestTooLarge ? 413 : unauthorized ? 401 : quota ? 402 : timedOut ? 504 : 502, {
             code: requestTooLarge ? "REQUEST_TOO_LARGE" : unauthorized ? "VIDEO_API_UNAUTHORIZED" : quota ? "VIDEO_API_QUOTA_EXCEEDED" : timedOut ? "VIDEO_API_TIMEOUT" : "VIDEO_API_UNAVAILABLE",
@@ -1470,7 +1485,7 @@ export function registerGenerationRoutes(middlewares: Server) {
                 durationSec,
                 attempt,
                 generateAudio: input.providerGenerateAudio === true,
-                regenerationInstruction: safeText(input.regenerationInstruction, 800) || undefined,
+                regenerationInstruction: promptText(input.regenerationInstruction) || undefined,
               });
               respond(response, 200, {
                 clip: {
@@ -1844,12 +1859,13 @@ export function registerGenerationRoutes(middlewares: Server) {
           respond(response, 422, { code: "INVALID_POSTPRODUCTION_ACTION", message: "未知的后期制作操作。" });
         } catch (error) {
           const requestTooLarge = error instanceof Error && error.message === "REQUEST_TOO_LARGE";
-          const unavailable = error instanceof Error && /ENOENT|not recognized|MEDIA_COMMAND_FAILED/.test(error.message);
-          const providerFailure = error instanceof Error && (error.message.startsWith("DISPATCH_") || error.message.startsWith("远端生成失败：") || error.message.startsWith("远端任务已失败；"));
+          const unavailable = !(error instanceof ProviderHttpError) && error instanceof Error && /ENOENT|not recognized|MEDIA_COMMAND_FAILED/.test(error.message);
+          const providerFailure = error instanceof ProviderHttpError || error instanceof Error && (error.message.startsWith("DISPATCH_") || error.message.startsWith("远端生成失败：") || error.message.startsWith("远端任务已失败；"));
           const inputFailure = error instanceof ShotVideoInputError;
           respond(response, requestTooLarge ? 413 : inputFailure ? 422 : unavailable ? 503 : providerFailure ? 502 : 500, {
             code: requestTooLarge ? "REQUEST_TOO_LARGE" : inputFailure ? 'VIDEO_INPUT_INVALID' : unavailable ? "MEDIA_RUNTIME_UNAVAILABLE" : providerFailure ? "VIDEO_PROVIDER_ERROR" : "POSTPRODUCTION_ERROR",
-            message: requestTooLarge ? "请求内容过大。" : inputFailure ? error.message : unavailable ? "本机媒体运行环境不可用或媒体命令执行失败。" : providerFailure ? sanitizedProviderText(error.message.replace(/^(?:DISPATCH_[A-Z0-9_]+:?|远端生成失败：)/, ""), "Seedance 视频任务失败，请查看任务状态后重试。") : "后期制作暂时失败，请重试。",
+            message: requestTooLarge ? "请求内容过大。" : inputFailure ? error.message : error instanceof ProviderHttpError ? error.message : unavailable ? "本机媒体运行环境不可用或媒体命令执行失败。" : providerFailure ? sanitizedProviderText(error.message.replace(/^(?:DISPATCH_[A-Z0-9_]+:?|远端生成失败：)/, ""), "Seedance 视频任务失败，请查看任务状态后重试。") : "后期制作暂时失败，请重试。",
+            ...(error instanceof ProviderHttpError ? {providerError:error.evidence} : {}),
           });
         }
       });

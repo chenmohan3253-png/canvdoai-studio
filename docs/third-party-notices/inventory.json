@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-01T10:26:12.683Z",
+  "generatedAt": "2026-11-01T16:27:35.724Z",
   "scope": "Installed production npm dependencies, including transitive packages and declarations. FFmpeg/Electron redistribution require separate review.",
   "packages": [
     {

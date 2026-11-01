@@ -27,6 +27,8 @@ export function providerModelToVideoModel(model: VideoProviderModel): VideoModel
     durationMax: model.durationMax,
     maxReferenceAssets: model.maxReferenceAssets,
     promptMaxChars: model.promptMaxChars,
+    catalogReportedPromptLimit: model.catalogReportedPromptLimit,
+    promptLimitBasis: model.promptLimitBasis,
     relativeCost: model.relativeCost,
     priceNote: model.priceNote,
     description: /:standard$/i.test(model.id) ? "Seedance 默认标准档" : "Seedance 实时可用模型档位",

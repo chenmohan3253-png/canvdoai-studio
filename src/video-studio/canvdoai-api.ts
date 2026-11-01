@@ -121,6 +121,8 @@ function normalizeModels(payload: unknown): VideoModelOption[] {
         durationMax: typeof model.durationMax === "number" ? model.durationMax : typeof model.duration_max === "number" ? model.duration_max : undefined,
         maxReferenceAssets: typeof model.maxReferenceAssets === "number" ? model.maxReferenceAssets : typeof model.max_reference_assets === "number" ? model.max_reference_assets : undefined,
         promptMaxChars: typeof model.promptMaxChars === "number" ? model.promptMaxChars : typeof model.prompt_max_chars === "number" ? model.prompt_max_chars : undefined,
+        catalogReportedPromptLimit: typeof model.catalogReportedPromptLimit === 'number' || model.catalogReportedPromptLimit === null ? model.catalogReportedPromptLimit : undefined,
+        promptLimitBasis: model.promptLimitBasis === 'USER_CONFIRMED_PROVIDER_LIMIT' || model.promptLimitBasis === 'ROUTE_CATALOG' || model.promptLimitBasis === 'DEFAULT_FALLBACK' ? model.promptLimitBasis : undefined,
         relativeCost: typeof model.relativeCost === "number" ? model.relativeCost : typeof model.relative_cost === "number" ? model.relative_cost : undefined,
         recommended: model.recommended === true || model.isRecommended === true || model.is_recommended === true,
         priceNote: typeof model.priceNote === "string" ? model.priceNote : typeof model.price_note === "string" ? model.price_note : typeof pricing.description === "string" ? pricing.description : undefined,

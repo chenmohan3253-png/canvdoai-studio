@@ -15,30 +15,13 @@ import {videoInputError} from '../src/desktop/video-inputs';
 import {extractVideoLastFrame} from './video-last-frame';
 import {videoAssetReceipt} from './video-asset-receipt';
 import {resolveCanvasVideoIntent} from './canvas-provider-attempt';
+import {resolveVideoPromptLimit} from './video-prompt-limits';
+import {parseProviderHttpError,isDefiniteProviderRejection} from './provider-http-error';
 
 const hash=(v:unknown)=>createHash('sha256').update(typeof v==='string'?v:JSON.stringify(v)).digest('hex');
 const now=()=>new Date().toISOString();
 class StudioValidationError extends Error {readonly failureStage='VALIDATION';}
 class ReferenceUploadError extends Error {readonly failureStage='REFERENCE_UPLOAD';}
-function providerErrorText(data:any,key:string){
-  const root=data?.error??data;
-  const code=typeof root?.code==='string'?root.code:typeof data?.code==='string'?data.code:'';
-  const raw=root?.message??root?.detail??data?.message??data?.detail??data?.errors;
-  let detail='';
-  if(Array.isArray(raw))detail=raw.map((item:any)=>{
-    if(typeof item==='string')return item;
-    const where=Array.isArray(item?.loc)?item.loc.filter((part:any)=>part!=='body'&&part!=='query').join('.'):(item?.path||'');
-    const message=item?.msg??item?.message??JSON.stringify(item);
-    return `${where?`${where}: `:''}${message}`;
-  }).join('; ');
-  else if(typeof raw==='string')detail=raw;
-  else if(raw!==undefined)detail=JSON.stringify(raw);
-  else if(data&&typeof data==='object')detail=JSON.stringify(data);
-  detail=detail.replace(/Bearer\s+[^\s"']+/gi,'Bearer [已隐藏]').replace(/(?:api[_-]?key|access[_-]?token)(["'\s:=]+)[^\s,"'}]+/gi,'$1[已隐藏]');
-  if(key)detail=detail.split(key).join('[API Key 已隐藏]');
-  detail=detail.slice(0,1200);
-  return `${code?` ${code}`:''}${detail?`：${detail}`:''}`;
-}
 export class StudioEngine {
   readonly store:StudioStore;private running=new Map<string,Promise<void>>();private stopped=false;
   private collectionTimers=new Map<string,ReturnType<typeof setTimeout>>();
@@ -73,8 +56,8 @@ export class StudioEngine {
     const requestBody:BodyInit|undefined=rawMultipart?Uint8Array.from(rawMultipart.body).buffer as ArrayBuffer:form instanceof FormData?form:body?JSON.stringify(body):undefined;
     const init:RequestInit={method:body||form?'POST':'GET',headers:{Authorization:`Bearer ${key}`,...(!form&&body?{'content-type':'application/json'}:{}),...(rawMultipart?{'content-type':rawMultipart.contentType,'content-length':String(rawMultipart.body.byteLength)}:{})},body:requestBody,redirect:'error',signal:AbortSignal.timeout(180000)};
     const response=path.startsWith('/v1/')?await videoGatewayFetch({...this.config,videoBase:base,videoKey:key},path,init):await fetch(base.replace(/\/+$/,'')+path,init);
+    if(!response.ok)throw await parseProviderHttpError(response,path,{secrets:[key,this.config.assetUploadKey].filter(Boolean),requestBody:form??body});
     const data=await response.json().catch(()=>null);
-    if(!response.ok)throw Error(`接口 ${path} 返回 HTTP ${response.status}${providerErrorText(data,key)||'：服务商未提供详细错误信息'}`);
     if(!data)throw Error('接口未返回JSON数据');return data;
   }
   async readUrl(url:string,max=256*1024*1024){
@@ -153,7 +136,8 @@ export class StudioEngine {
     if(capability==='first_last_frame'&&!slots.includes('first_frame'))throw new StudioValidationError('参数校验失败：使用尾帧时必须同时提供首帧。任务未提交，不会产生视频费用。');
     if(!model.resolutions?.includes(node.data.resolution)||!model.aspect_ratios?.includes(node.data.aspectRatio))throw new StudioValidationError('参数校验失败：模型不支持所选分辨率或画幅。任务未提交，不会产生视频费用。');
     if(!Number.isInteger(node.data.duration)||node.data.duration<(model.duration_min??4)||node.data.duration>(model.duration_max??15))throw new StudioValidationError(`参数校验失败：镜头时长必须在 ${model.duration_min??4}—${model.duration_max??15} 秒之间。任务未提交，不会产生视频费用。`);
-    const promptLimit=model.prompt_max_chars??5000,referenceLimit=model.max_reference_assets??12;
+    const promptLimits=resolveVideoPromptLimit(cfg,model);
+    const promptLimit=promptLimits.limit,referenceLimit=model.max_reference_assets??12;
     const usage=videoPromptUsage(node.data.prompt,inputs.filter(i=>i.slot==='prompt').map(i=>i.asset.text||''),promptLimit);
     if(!usage.content.trim())throw new StudioValidationError('参数校验失败：请填写提示词或连接文本输入。任务未提交，不会产生生成费用。');
     if(usage.overBy>0)throw new StudioValidationError(`参数校验失败：提交提示词 ${usage.used} 字符，超过 ${modelId} 上限 ${usage.limit} 字符（超出 ${usage.overBy}）。请压缩提示词或自动拆分镜头。任务未提交，不会产生视频费用。`);
@@ -164,7 +148,7 @@ export class StudioEngine {
       if(references.some(item=>item.asset.kind==='video'))throw new StudioValidationError('极九带参考视频须提供真实参考时长；当前画布尚未采集该值，请先只用图片/音频参考。任务未提交，不会产生视频费用。');
       if(references.length&&!cfg.assetUploadBase)throw new StudioValidationError('极九参考素材需先上传到公网 HTTPS 素材服务；请在接口设置中配置独立上传服务。任务未提交，不会产生视频费用。');
     }
-    return {cfg,modelId,model,capability,usage,references,parameters:{duration_seconds:node.data.duration,resolution:node.data.resolution,aspect_ratio:node.data.aspectRatio,generate_audio:node.data.generateAudio!==false,...(Number.isInteger(node.data.seed)?{seed:node.data.seed}:{})}};
+    return {cfg,modelId,model,promptLimits,capability,usage,references,parameters:{duration_seconds:node.data.duration,resolution:node.data.resolution,aspect_ratio:node.data.aspectRatio,generate_audio:node.data.generateAudio!==false,...(Number.isInteger(node.data.seed)?{seed:node.data.seed}:{})}};
   }
   /** Read-only preflight: reads a local canvas and the current model catalog, never uploads or starts a job. */
   async prepareVideoRequest(canvasId:string,nodeId:string){
@@ -204,7 +188,7 @@ export class StudioEngine {
     const routeId=`${protocol}-${hash(plan.cfg.videoBase||'').slice(0,16)}`;
     const catalogSnapshot={model:plan.model.model||plan.model.id,capabilities:plan.model.capabilities,resolutions:plan.model.resolutions,aspect_ratios:plan.model.aspect_ratios,duration_min:plan.model.duration_min,duration_max:plan.model.duration_max,prompt_max_chars:plan.model.prompt_max_chars??null,max_reference_assets:plan.model.max_reference_assets??null};
     const attachmentMapping=plan.references.map(({slot,asset},index)=>({assetId:asset.id,sha256:asset.sha256??null,kind:asset.kind,requestSlot:slot,order:index,catalog:asset.catalog??null,providerAssetId:null,providerAccepted:false,uploadStatus:'NOT_STARTED'}));
-    return {schemaVersion:1,evidenceType:'ACTUAL_ADAPTER_PREPARED_REQUEST',captureMethod:'READ_ONLY_ADAPTER_PREPARE',requestSubmitted:false,estimated:false,capturedAt:now(),canvasId,nodeId,shotId:node.data.assetContext?.shotId??null,adapterId:protocol,adapterVersion:'1.1.17',routeId,sourcePromptSha256:hash(plan.usage.content),sourcePromptBody:plan.usage.content,capturedRequest:{model:plan.modelId,prompt:plan.usage.submitted,capability:plan.capability,parameters:plan.parameters,allow_fallback:false},preparedPromptUtf8Sha256:hash(plan.usage.submitted),preparedPromptChars:Array.from(plan.usage.submitted).length,preparedPromptUtf16Units:plan.usage.submitted.length,platformAddedPromptChars:Array.from(plan.usage.submitted).length-Array.from(plan.usage.content).length,attachmentMapping,attachmentsPendingUpload:attachmentMapping.length>0,requestBodyComplete:attachmentMapping.length===0,routeLimits:{schemaVersion:1,evidenceType:'ROUTE_CATALOG_LIMIT_SNAPSHOT',countUnit:'utf16_code_units',adapterId:protocol,adapterVersion:'1.1.17',routeId,model:plan.modelId,adapterEnforcedPromptLimit:plan.usage.limit,catalogReportedPromptLimit:plan.model.prompt_max_chars??null,providerVerifiedPromptLimit:null,catalogSnapshotSha256:hash(catalogSnapshot),catalogSnapshot,unknowns:['供应商内部 prompt_extend 后的最终模型提示词与限制未由本地能力目录证明'],notes:protocol==='fuliu'?'伏流目录中的 10000 字符值由本地适配器补齐，不是供应商独立核实值。':'能力目录值用于客户端门禁；尚不能证明供应商内部模型最终上限。'},providerMayExtendPrompt:protocol==='wan3',evidencePersisted:false};
+    return {schemaVersion:1,evidenceType:'ACTUAL_ADAPTER_PREPARED_REQUEST',captureMethod:'READ_ONLY_ADAPTER_PREPARE',requestSubmitted:false,estimated:false,capturedAt:now(),canvasId,nodeId,shotId:node.data.assetContext?.shotId??null,adapterId:protocol,adapterVersion:'1.1.19',routeId,sourcePromptSha256:hash(plan.usage.content),sourcePromptBody:plan.usage.content,capturedRequest:{model:plan.modelId,prompt:plan.usage.submitted,capability:plan.capability,parameters:plan.parameters,allow_fallback:false},preparedPromptUtf8Sha256:hash(plan.usage.submitted),preparedPromptChars:Array.from(plan.usage.submitted).length,preparedPromptUtf16Units:plan.usage.submitted.length,platformAddedPromptChars:Array.from(plan.usage.submitted).length-Array.from(plan.usage.content).length,attachmentMapping,attachmentsPendingUpload:attachmentMapping.length>0,requestBodyComplete:attachmentMapping.length===0,routeLimits:{schemaVersion:1,evidenceType:'ROUTE_CATALOG_LIMIT_SNAPSHOT',countUnit:'utf16_code_units',adapterId:protocol,adapterVersion:'1.1.19',routeId,model:plan.modelId,adapterEnforcedPromptLimit:plan.usage.limit,catalogReportedPromptLimit:plan.promptLimits.catalogReportedPromptLimit,localPromptLimitOverride:plan.promptLimits.localPromptLimitOverride,providerVerifiedPromptLimit:null,catalogSnapshotSha256:hash(catalogSnapshot),catalogSnapshot,unknowns:['供应商内部 prompt_extend 后的最终模型提示词与限制未由本地能力目录证明'],notes:protocol==='fuliu'?'伏流目录中的 10000 字符值由本地适配器补齐，不是供应商独立核实值。':'能力目录值用于客户端门禁；尚不能证明供应商内部模型最终上限。'},providerMayExtendPrompt:protocol==='wan3',evidencePersisted:false};
   }
   async videoRouteLimits(modelId:string){
     if(!modelId||modelId.length>120)throw Error('请提供有效的视频模型 ID');
@@ -213,7 +197,8 @@ export class StudioEngine {
     if(!model)throw Error('当前 API 能力目录中没有该模型');
     const protocol=this.config.videoProtocol==='jijiu'?'jijiu':this.config.videoProtocol==='fuliu'?'fuliu':modelId.startsWith('wan-3.0')?'wan3':'gateway';
     const snapshot={model:model.model||model.id,capabilities:model.capabilities,resolutions:model.resolutions,aspect_ratios:model.aspect_ratios,duration_min:model.duration_min,duration_max:model.duration_max,prompt_max_chars:model.prompt_max_chars??null,max_reference_assets:model.max_reference_assets??null};
-    return {schemaVersion:1,evidenceType:'ROUTE_CATALOG_LIMIT_SNAPSHOT',capturedAt:now(),requestSubmitted:false,adapterId:protocol,adapterVersion:'1.1.17',routeId:`${protocol}-${hash(this.config.videoBase||'').slice(0,16)}`,model:modelId,countUnit:'utf16_code_units',adapterEnforcedPromptLimit:model.prompt_max_chars??5000,catalogReportedPromptLimit:model.prompt_max_chars??null,providerVerifiedPromptLimit:null,catalogSnapshotSha256:hash(snapshot),catalogSnapshot:snapshot,notes:protocol==='fuliu'?'10000 字符上限由本地伏流适配器补齐，尚未从供应商独立核实。':'能力目录仅证明当前路由对客户端返回的上限，不证明供应商内部模型上限。',evidencePersisted:false};
+    const limits=resolveVideoPromptLimit(this.config,model);
+    return {schemaVersion:1,evidenceType:'ROUTE_CATALOG_LIMIT_SNAPSHOT',capturedAt:now(),requestSubmitted:false,adapterId:protocol,adapterVersion:'1.1.19',routeId:`${protocol}-${hash(this.config.videoBase||'').slice(0,16)}`,model:modelId,countUnit:'utf16_code_units',adapterEnforcedPromptLimit:limits.limit,catalogReportedPromptLimit:limits.catalogReportedPromptLimit,localPromptLimitOverride:limits.localPromptLimitOverride,providerVerifiedPromptLimit:null,catalogSnapshotSha256:hash(snapshot),catalogSnapshot:snapshot,notes:protocol==='fuliu'?'10000 字符上限由本地伏流适配器补齐，尚未从供应商独立核实。':'能力目录仅证明当前路由对客户端返回的上限，不证明供应商内部模型上限。',evidencePersisted:false};
   }
   async generated(node:CanvasNode,inputs:{slot:string;asset:StudioAsset}[],key:string,hooks:{queryOnly?:boolean;onRemote?:(job:RemoteJob)=>void}={}):Promise<StudioAsset>{
     const cfg={...this.config};
@@ -375,10 +360,11 @@ export class StudioEngine {
                 asset=await this.lastFrame(inputs[0].asset.id,doc.projectId,id);
               }
               else {
-                const intent=this.store.get<{state:string}>('node-intent',intentKey);
+                const intent=this.store.get<{state:string;message?:string}>('node-intent',intentKey);
+                if(intent?.state==='REJECTED'&&node.data.kind!=='videoGenerate')throw Error((intent.message||'服务商已明确拒绝原请求')+'；请修改后明确重新生成，不会自动重试');
                 if(intent&&['SUBMITTING','UNKNOWN'].includes(intent.state)&&node.data.kind!=='videoGenerate')throw Error('前次文字/图片请求结果未知；为避免重复收费，请核对服务商记录后明确重新生成');
                 this.store.put('node-intent',intentKey,{state:'SUBMITTING',at:now(),canvasId:doc.id,nodeId:id});
-                try{asset=await this.generated(node,inputs,`canvas-${intentKey}`,{onRemote:job=>{if(job.id){task.providerWait={nodeId:id,providerKey:`canvas-${intentKey}`,remoteId:job.id,fingerprint};this.store.put('canvas-task',task.id,task);}}});}catch(e){const validation=e instanceof StudioValidationError,upload=e instanceof ReferenceUploadError,pending=e instanceof ProviderPendingError;this.store.put('node-intent',intentKey,{state:pending?'REMOTE':validation||upload?'NOT_SUBMITTED':'UNKNOWN',at:now(),message:e instanceof Error?e.message:'任务失败'});if(pending){task.providerWait={nodeId:id,providerKey:e.providerKey,remoteId:e.remoteId,fingerprint};delete task.failureStage;}else if(validation)task.failureStage='VALIDATION';else if(upload)task.failureStage='REFERENCE_UPLOAD';else task.failureStage='SUBMISSION_OR_PROVIDER';throw e;}
+                try{asset=await this.generated(node,inputs,`canvas-${intentKey}`,{onRemote:job=>{if(job.id){task.providerWait={nodeId:id,providerKey:`canvas-${intentKey}`,remoteId:job.id,fingerprint};this.store.put('canvas-task',task.id,task);}}});}catch(e){const validation=e instanceof StudioValidationError,upload=e instanceof ReferenceUploadError,pending=e instanceof ProviderPendingError;this.store.put('node-intent',intentKey,{state:pending?'REMOTE':validation||upload?'NOT_SUBMITTED':isDefiniteProviderRejection(e)?'REJECTED':'UNKNOWN',at:now(),message:e instanceof Error?e.message:'任务失败'});if(pending){task.providerWait={nodeId:id,providerKey:e.providerKey,remoteId:e.remoteId,fingerprint};delete task.failureStage;}else if(validation)task.failureStage='VALIDATION';else if(upload)task.failureStage='REFERENCE_UPLOAD';else task.failureStage='SUBMISSION_OR_PROVIDER';throw e;}
                 asset.origin.projectId=doc.projectId;this.store.put('asset',asset.id,asset);
               }
               this.store.put('node-result',intentKey,{assetId:asset.id});this.store.put('node-intent',intentKey,{state:'SUCCEEDED'});

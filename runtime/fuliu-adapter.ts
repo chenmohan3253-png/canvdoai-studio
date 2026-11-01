@@ -88,6 +88,21 @@ export function wanCreateBody(input:any){
     }
   };
 }
+function seedanceDispatchBody(input:any){
+  if(!Array.isArray(input.assets))return input;
+  const usableUrl=(value:unknown)=>{
+    if(typeof value!=='string'||!value.trim())return undefined;
+    try{const url=new URL(value.trim());if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)return value.trim();}catch{}
+    return undefined;
+  };
+  return {...input,assets:input.assets.map((asset:any)=>{
+    if(!asset||typeof asset!=='object'||Array.isArray(asset))return asset;
+    const url=usableUrl(asset.url)||usableUrl(asset.cdn_url);
+    // Historical Dispatch clients send URL/role/order. A private object receipt
+    // has no proven URL mapping, so preserve it for that provider to interpret.
+    return url?{url,role:asset.role,order:asset.order}:asset;
+  })};
+}
 export async function videoGatewayFetch(config:Record<string,string>,path:string,init:RequestInit={},fetcher:typeof fetch=fetch):Promise<Response>{
   const fuliu=config.videoProtocol==='fuliu';
   const jijiu=config.videoProtocol==='jijiu';
@@ -120,6 +135,9 @@ export async function videoGatewayFetch(config:Record<string,string>,path:string
       headers.set('content-type','application/json');
       body=JSON.stringify(wanCreateBody(input));
       map=normalizeWanJob;
+    }else if(typeof input.model==='string'&&/^seedance-/i.test(input.model)){
+      headers.set('content-type','application/json');
+      body=JSON.stringify(seedanceDispatchBody(input));
     }
   }else if(!jijiu&&!fuliu&&path.startsWith(WAN_TASK_PREFIX)){
     const id=path.slice(WAN_TASK_PREFIX.length);
