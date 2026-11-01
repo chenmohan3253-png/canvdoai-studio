@@ -1,4 +1,4 @@
-export const VIDEO_PROMPT_SUFFIX = '\n生成原生声音；所有指定台词需实际说出。画面不要生成字幕、文字或水印。';
+export const VIDEO_PROMPT_SUFFIX = '\n生成原生声音；所有指定台词需实际说出。不要额外生成非剧情字幕或水印；剧情明确要求的可读道具文字应准确呈现。';
 
 export interface VideoPromptUsage {
   content:string;
@@ -31,6 +31,8 @@ const platformDuplicatePatterns=[
   /生成原生声音[；;，,。\s]*/g,
   /所有指定台词需实际说出[；;，,。\s]*/g,
   /画面(?:中)?不要生成字幕、?文字或水印[；;，,。\s]*/g,
+  /不要额外生成非剧情字幕或水印[；;，,。\s]*/g,
+  /剧情明确要求的可读道具文字应准确呈现[；;，,。\s]*/g,
   /(?:不要|禁止)(?:生成|出现)?字幕、?文字(?:和|或)水印[；;，,。\s]*/g,
 ];
 

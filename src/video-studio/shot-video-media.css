@@ -1,0 +1,24 @@
+.shot-media-editor{padding:12px 0;min-width:0;color:inherit}
+.shot-media-editor h4{margin:8px 0;font-size:13px;letter-spacing:0}
+.shot-media-editor button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;border:1px solid #53616d;border-radius:4px;background:transparent;color:inherit;padding:5px 9px;font:inherit;cursor:pointer}
+.shot-media-editor button:disabled{opacity:.45;cursor:default}
+.shot-media-editor button[aria-pressed=true]{background:#285a49;border-color:#4a9c80;color:#fff}
+.shot-media-modes,.shot-media-kinds{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.shot-media-frames{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.shot-media-picker,.shot-media-continuation{display:flex;align-items:center;gap:6px;min-width:0;margin:8px 0}
+.shot-media-picker select,.shot-media-continuation select{min-width:0;flex:1;background:#171d23;color:inherit;border:1px solid #53616d;border-radius:4px;padding:7px;font:inherit}
+.shot-media-picker button{width:34px;flex:0 0 34px}
+.shot-media-item{border:1px solid #53616d;border-radius:4px;padding:8px;min-width:0}
+.shot-media-item>img,.shot-media-item>video{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#111;margin-bottom:6px}
+.shot-media-item>audio{display:block;width:100%;height:38px;margin-bottom:6px}
+.shot-media-item>div{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.shot-media-item span{font-size:12px;overflow-wrap:anywhere;min-width:0}
+.shot-media-item>div>div{display:flex;gap:4px;flex-shrink:0}
+.shot-media-item button{width:28px;min-height:28px;padding:3px}
+.shot-media-references{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:10px}
+.shot-media-continuation{flex-wrap:wrap}
+.shot-media-continuation select{min-width:160px}
+.shot-media-error{color:#efb484;font-size:12px;overflow-wrap:anywhere;margin:8px 0}
+.shot-media-entry{border-bottom:1px solid #46515c;padding:12px 0}
+.shot-media-entry>summary{cursor:pointer;font-size:14px;letter-spacing:0}
+@media(max-width:640px){.shot-media-frames{grid-template-columns:1fr}.shot-media-item>div{flex-wrap:wrap}}

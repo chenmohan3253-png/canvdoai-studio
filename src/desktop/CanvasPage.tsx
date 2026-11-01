@@ -2,22 +2,26 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {useNavigate,useParams,useSearchParams} from 'react-router-dom';
 import {ReactFlow,Background,Controls,MiniMap,Handle,Position,applyNodeChanges,applyEdgeChanges,type NodeProps,type Node,type Connection} from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import {newNode,NODE_KINDS,NODE_LABELS,validateGraph,arrangeGraph,withoutDanglingEdges,executionNodeIds,type CanvasDocument,type CanvasNode,type StudioAsset,type NodeKind} from './canvas-model';
+import {newNode,NODE_KINDS,NODE_LABELS,validateGraph,arrangeGraph,withoutDanglingEdges,executionNodeIds,studioAssetDownloadName,type CanvasDocument,type CanvasNode,type StudioAsset,type NodeKind} from './canvas-model';
 import {studioApi,downloadStudio,type StudioState} from './studio-client';
 import {ArchiveProjectDialog} from './ArchiveProjectDialog';
 import {useVideoCatalog} from './use-video-catalog';
+import {VideoInputs} from './VideoInputs';
+import {attachVideoInput,moveVideoReference,videoInputs,videoInputError,type VideoInputSlot} from './video-inputs';
 import {VideoModelSelect} from './VideoModelSelect';
 import {canvasNodeStatuses,type CanvasNodeStatus} from './canvas-node-status';
 import {CanvasNodeFooter} from './CanvasNodeFooter';
 import {StudioImagePreview} from './StudioImagePreview';
 import {compactVideoPromptSafely,splitVideoPrompt,videoPromptUsage,VIDEO_PROMPT_SUFFIX} from './video-prompt-tools';
 import {WORKFLOW_TEMPLATES,type WorkflowTemplateId} from './workflow-templates';
+import {appendContinuation} from './shot-continuation';
+import {ArrowRightToLine} from 'lucide-react';
 import './canvas.css';
 
 function NodeCard({data,selected}:NodeProps<Node<CanvasNode['data']&{preview?:StudioAsset;taskStatus?:CanvasNodeStatus}>>){
   const asset=data.preview,kind=data.kind;
   return <div className={`studio-node ${selected?'selected':''}`}><header><span>{NODE_LABELS[kind]}</span><strong>{data.label}</strong></header>
-    {!['textInput','imageInput'].includes(kind)&&<Handle type="target" position={Position.Left} id={kind==='output'?'input':'prompt'} style={{top:44}}/>}
+    {!['textInput','imageInput'].includes(kind)&&<Handle type="target" position={Position.Left} id={['output','videoLastFrame'].includes(kind)?'input':'prompt'} style={{top:44}}/>}
     {['imageGenerate','videoGenerate'].includes(kind)&&<><Handle type="target" position={Position.Left} id="reference" style={{top:100,background:'#26cda6'}}/><small className="slot-label" style={{top:90}}>参考素材</small></>}
     {kind==='videoGenerate'&&<><Handle type="target" position={Position.Left} id="first_frame" style={{top:145,background:'#edb958'}}/><small className="slot-label" style={{top:135}}>首帧</small><Handle type="target" position={Position.Left} id="last_frame" style={{top:190,background:'#edb958'}}/><small className="slot-label" style={{top:180}}>尾帧</small></>}
     {kind!=='output'&&<Handle type="source" position={Position.Right} id="result"/>}
@@ -48,7 +52,7 @@ export function CanvasPage(){
   const [deleteTarget,setDeleteTarget]=useState<StudioState['projects'][number]>();
   const projectId=searchParams.get('projectId')||'',currentProject=state.projects?.find(project=>project.id===projectId);
   const file=useRef<HTMLInputElement>(null);
-  const active=state.tasks.find(t=>t.canvasId===canvasId&&['QUEUED','RUNNING'].includes(t.state));const locked=busy||!!active;
+  const active=state.tasks.find(t=>t.canvasId===canvasId&&['QUEUED','RUNNING','WAITING_PROVIDER'].includes(t.state));const locked=busy||!!active;
   const refresh=useCallback(async()=>{const next=await studioApi<StudioState>('/state');setState(next);if(canvasId&&serial.current===saved.current&&!saving.current){const nextDoc=next.canvases.find(d=>d.id===canvasId);current.current=nextDoc;setDoc(nextDoc);}return next;},[canvasId]);
   useEffect(()=>{let alive=true;refresh().catch(e=>alive&&setNotice(e.message));const timer=setInterval(()=>refresh().catch(e=>alive&&setNotice(e.message)),2500);return()=>{alive=false;clearInterval(timer);};},[refresh]);
   const save=useCallback(async()=>{
@@ -93,12 +97,23 @@ export function CanvasPage(){
   function connect(connection:Connection){if(!doc)return;const next={...doc,edges:[...doc.edges,{...connection,id:crypto.randomUUID()}]};const error=validateGraph(next,state.assets);if(error)setNotice(error);else edit(next);}
   function undo(redo=false){if(!doc||locked)return;const from=redo?future:past,to=redo?past:future;const next=from.current.pop();if(next){to.current.push(structuredClone(doc));edit({...next,revision:doc.revision},false);}}
   function duplicate(){if(!doc||locked)return;const selectedNodes=doc.nodes.filter(n=>n.selected||n.id===selected),mapping=new Map(selectedNodes.map(n=>[n.id,crypto.randomUUID()]));const nodes=selectedNodes.map(n=>({...structuredClone(n),id:mapping.get(n.id)!,selected:false,position:{x:n.position.x+50,y:n.position.y+70},data:{...structuredClone(n.data),versions:[],selectedVersion:undefined}}));const edges=doc.edges.filter(e=>mapping.has(e.source)&&mapping.has(e.target)).map(e=>({...e,id:crypto.randomUUID(),source:mapping.get(e.source)!,target:mapping.get(e.target)!}));edit({...doc,nodes:[...doc.nodes,...nodes],edges:[...doc.edges,...edges]});}
+  function continueShot(){
+    if(!doc||!selected||locked)return;
+    try{const result=appendContinuation(doc,selected,state.assets);edit(result.doc);setSelected(result.nextNodeId);setNotice('续接节点已建立，尚未生成。请填写下一镜头提示词并确认模型支持首帧输入。');}catch(error){setNotice((error as Error).message);}
+  }
   async function run(nodeId?:string,force=false){
     const source=current.current;if(!source)return;
     let order:string[];try{order=executionNodeIds(source,nodeId);}catch(e){setNotice((e as Error).message);return;}
     for(const id of order){
       const candidate=source.nodes.find(item=>item.id===id);if(candidate?.data.kind!=='videoGenerate')continue;
       const model=models?.models.find(item=>item.id===candidate.data.model);if(!model)continue;
+      const plannedInputs=videoInputs(source,id,state.assets).map(input=>{
+        const upstream=source.nodes.find(n=>n.id===input.sourceId);
+        const plannedKind=upstream&&['imageGenerate','videoLastFrame'].includes(upstream.data.kind)?'image':upstream?.data.kind==='videoGenerate'?'video':undefined;
+        return {slot:input.slot,asset:input.asset||(plannedKind?{kind:plannedKind}:undefined)};
+      });
+      const inputProblem=videoInputError(plannedInputs,model.capabilities,model.maxReferenceAssets);
+      if(inputProblem){setSelected(id);setNotice(`参数校验失败：${candidate.data.label}，${inputProblem}。任务未提交。`);return;}
       const usage=videoPromptUsage(candidate.data.prompt,knownPromptInputs(source,id,state.assets),model.promptMaxChars??5000);
       if(usage.overBy>0){setSelected(id);setNotice(`参数校验失败：${candidate.data.label} 提交预计 ${usage.used}/${usage.limit} 字符，超出 ${usage.overBy} 字。请使用右侧“一键安全压缩”或“自动拆分镜头”。任务尚未提交，不会产生视频费用。`);return;}
       const references=knownReferenceCount(source,id),referenceLimit=model.maxReferenceAssets??12;
@@ -108,6 +123,28 @@ export function CanvasPage(){
     setBusy(true);setSubmitting({nodeId,phase:'saving'});setNotice('正在保存当前参数…');try{await save();if(serial.current!==saved.current)throw Error('当前修改尚未保存，请重新点击运行');const canvas=current.current;if(!canvas)throw Error('画布不存在');setSubmitting({nodeId,phase:'submitting'});setNotice('参数已保存，正在创建生成任务…');const task=await studioApi<StudioState['tasks'][number]>('/run',{canvasId:canvas.id,nodeId,force,requestId:crypto.randomUUID(),confirmCost:true});setState(value=>({...value,tasks:[task,...value.tasks.filter(item=>item.id!==task.id)]}));setNotice('任务已持久化，正在生成；可以离开此页，返回后继续查看进度。');setSubmitting(undefined);await refresh();}catch(e){setNotice((e as Error).message);}finally{setSubmitting(undefined);setBusy(false);}
   }
   async function importMedia(){try{const media=await window.desktop?.importMedia();if(!media){if(!window.desktop)setNotice('本机导入请在桌面安装版使用；浏览器预览不开放文件系统权限');return;}if(!doc)throw Error('请先打开画布');const asset=await studioApi<StudioAsset>('/asset',{...media,projectId:doc.projectId});await refresh();if(selected)changeNode({assetId:asset.id,origin:asset.origin});}catch(e){setNotice((e as Error).message);}}
+  function attachInput(slot:VideoInputSlot,assetId:string){
+    const value=current.current,item=state.assets.find(a=>a.id===assetId);
+    if(!value||!selected||!item)return;
+    try{edit(attachVideoInput(value,selected,slot,item,state.assets));setNotice('素材连线已更新，未提交生成');}catch(e){setNotice((e as Error).message);}
+  }
+  async function importInput(slot:VideoInputSlot,kind:StudioAsset['kind']){
+    const nodeId=selected,canvas=current.current;if(!nodeId||!canvas||locked)return;
+    setBusy(true);
+    try{
+      const media=await window.desktop?.importMedia();
+      if(!media){if(!window.desktop)throw Error('请在桌面安装版导入本机素材');return;}
+      if(media.kind!==kind)throw Error(`所选素材类型与当前入口不符：${media.kind}`);
+      const asset=await studioApi<StudioAsset>('/asset',{...media,projectId:canvas.projectId});
+      const fresh=await refresh(),value=current.current;
+      if(!value||value.id!==canvas.id)throw Error('画布已切换；素材已保存到原项目，未修改其他画布');
+      if(fresh.tasks.some(t=>t.canvasId===canvas.id&&['QUEUED','RUNNING','WAITING_PROVIDER'].includes(t.state)))throw Error('画布已开始运行；素材已归档，请在任务结束后连接');
+      const assets=fresh.assets.some(a=>a.id===asset.id)?fresh.assets:[...fresh.assets,asset];
+      setState(s=>({...s,assets}));
+      edit(attachVideoInput(value,nodeId,slot,asset,assets));
+      setNotice('素材已归档并连接，未提交生成');
+    }catch(e){setNotice((e as Error).message);}finally{setBusy(false);}
+  }
   const node=doc?.nodes.find(n=>n.id===selected),chosen=node?.data.versions.find(v=>v.id===node.data.selectedVersion),asset=state.assets.find(a=>a.id===(chosen?.assetId||node?.data.assetId));
   const videoModel=models?.models?.find(m=>m.id===node?.data.model);
   const promptInputs=node&&doc?knownPromptInputs(doc,node.id,state.assets):[];
@@ -163,18 +200,20 @@ export function CanvasPage(){
     <div className="canvas-layout"><div className="flow-surface"><ReactFlow nodes={doc.nodes.map(n=>({...n,selected:n.id===selected,data:{...n.data,taskStatus:nodeStatuses.get(n.id),preview:state.assets.find(a=>a.id===(n.data.versions.find(v=>v.id===n.data.selectedVersion)?.assetId||n.data.assetId))}}))} edges={doc.edges} nodeTypes={nodeTypes} onNodesChange={changes=>{if(locked)return;const persistent=changes.filter(c=>c.type!=='select'&&c.type!=='dimensions');if(persistent.length){const nodes=applyNodeChanges(persistent,doc.nodes) as CanvasNode[];edit(withoutDanglingEdges({...doc,nodes}));}}} onEdgesChange={changes=>{if(locked)return;const persistent=changes.filter(c=>c.type!=='select');if(persistent.length)edit({...doc,edges:applyEdgeChanges(persistent,doc.edges)});}} onConnect={connect} onNodeClick={(_,n)=>setSelected(n.id)} onPaneClick={()=>setSelected(undefined)} nodesDraggable={!locked} nodesConnectable={!locked} deleteKeyCode={locked?null:['Backspace','Delete']} fitView minZoom={0.15} maxZoom={2} colorMode="dark" onMoveEnd={(_,viewport)=>{const value=current.current;if(!locked&&value&&viewportChanged(value.viewport,viewport))edit({...value,viewport},false);}} defaultViewport={doc.viewport}><Background gap={24}/><Controls/><MiniMap pannable zoomable/></ReactFlow></div>
     <aside className="canvas-inspector"><h2>{node?'节点设置':'素材与运行记录'}</h2>{node?<>
       <label>名称<input value={node.data.label} disabled={locked} onChange={e=>changeNode({label:e.target.value})}/></label>
-      {!['imageInput','output'].includes(node.data.kind)&&<label>{node.data.kind==='textInput'?'文本内容':'提示词 / 运镜 / 必说台词'}<textarea rows={6} disabled={locked} value={node.data.prompt} onChange={e=>changeNode({prompt:e.target.value})}/></label>}
+      {!['imageInput','output','videoLastFrame'].includes(node.data.kind)&&<label>{node.data.kind==='textInput'?'文本内容':'提示词 / 运镜 / 必说台词'}<textarea rows={6} disabled={locked} value={node.data.prompt} onChange={e=>changeNode({prompt:e.target.value})}/></label>}
       {node.data.kind==='videoGenerate'&&videoUsage&&<div className={`prompt-budget ${videoUsage.overBy?'over':''}`} role="status"><div><strong>模型提示词额度</strong><span>{videoUsage.used.toLocaleString()} / {videoUsage.limit.toLocaleString()} 字符</span></div><small>{videoModel?.promptMaxChars===undefined?'接口未报告上限，暂按 5000 字符校验；':'上限来自当前视频接口能力目录；'}本节点 {videoUsage.nodeChars} + 已知上游 {videoUsage.upstreamChars} + 分隔 {videoUsage.separatorChars} + 自动附加 {videoUsage.suffixChars} 字符。参考素材 {referenceCount}/{videoModel?.maxReferenceAssets??12}。</small>{videoUsage.overBy?<><p>已超出 {videoUsage.overBy.toLocaleString()} 字。运行将在本地拦截，不提交服务商、不产生视频费用。</p><div><button type="button" disabled={locked} onClick={compactSelectedPrompt}>一键安全压缩</button><button type="button" disabled={locked||!videoModel} onClick={splitSelectedPrompt}>自动拆分镜头</button></div></>:<p>当前长度符合所选模型要求，可以提交；若上游节点稍后生成新文字，将在最终提交前重新计算。</p>}</div>}
       {node.data.kind==='imageInput'&&<><label>项目素材<select disabled={locked} value={node.data.assetId||''} onChange={e=>{const a=state.assets.find(a=>a.id===e.target.value&&a.libraryScope!=='shared'&&a.origin.projectId===doc.projectId);changeNode({assetId:a?.id,origin:a?.origin});}}><option value="">选择本项目素材</option>{state.assets.filter(a=>a.kind!=='text'&&a.libraryScope!=='shared'&&a.origin.projectId===doc.projectId).map(a=><option key={a.id} value={a.id}>{a.name} · {a.catalog?.shotId||a.catalog?.characterId||a.origin.module}</option>)}</select></label><button disabled={locked} onClick={importMedia}>导入本机图片 / 视频 / 音频</button></>}
       {['imageGenerate','videoGenerate'].includes(node.data.kind)&&<fieldset className="asset-node-context"><legend>镜头归属 · 防止挂错素材</legend>{(['episodeId','sceneId','shotId'] as const).map(field=><label key={field}>{({episodeId:'集数 ID',sceneId:'场景 ID',shotId:'镜头 ID'} as const)[field]}<input disabled={locked} value={node.data.assetContext?.[field]||''} onChange={e=>changeNode({assetContext:{...node.data.assetContext,[field]:e.target.value}})}/></label>)}<label>角色 ID（多个用逗号分隔）<input disabled={locked} value={(node.data.assetContext?.characterIds||[]).join(', ')} onChange={e=>changeNode({assetContext:{...node.data.assetContext,characterIds:e.target.value.split(/[,，]/).map(value=>value.trim()).filter(Boolean)}})}/></label><small>素材若标明集数、场景、镜头或角色，保存前必须与这里一致。</small></fieldset>}
       {['textGenerate','imageGenerate'].includes(node.data.kind)&&<label>模型ID（留空使用统一配置）<input disabled={locked} value={node.data.model||''} onChange={e=>changeNode({model:e.target.value})}/></label>}
       {node.data.kind==='imageGenerate'&&<label>图片尺寸<select disabled={locked} value={node.data.size} onChange={e=>changeNode({size:e.target.value})}>{['1024x1024','1536x1024','1024x1536'].map(v=><option key={v}>{v}</option>)}</select></label>}
       {node.data.kind==='videoGenerate'&&<><VideoModelSelect catalog={catalog} value={node.data.model||''} disabled={locked} onChange={m=>changeNode({model:m.id,resolution:m.resolutions[0]||'480p',aspectRatio:m.aspectRatios.find(a=>a==='9:16')||m.aspectRatios[0]||'9:16',duration:m.durationMin||5,seed:undefined})} onOpenSettings={()=>{void save().then(()=>navigate('/settings')).catch(e=>setNotice(e.message));}}/><label>分辨率<select disabled={videoParametersDisabled} value={node.data.resolution} onChange={e=>changeNode({resolution:e.target.value})}>{(videoModel?.resolutions||[node.data.resolution]).map(v=><option key={v}>{v}</option>)}</select></label><label>画幅<select disabled={videoParametersDisabled} value={node.data.aspectRatio} onChange={e=>changeNode({aspectRatio:e.target.value})}>{(videoModel?.aspectRatios||[node.data.aspectRatio]).map(v=><option key={v}>{v}</option>)}</select></label><label>时长（秒）<input disabled={videoParametersDisabled} type="number" min={videoModel?.durationMin||4} max={videoModel?.durationMax||15} value={node.data.duration} onChange={e=>changeNode({duration:Number(e.target.value)})}/></label><label>随机种子（可选）<input disabled={videoParametersDisabled} type="number" value={node.data.seed??''} onChange={e=>changeNode({seed:e.target.value===''?undefined:Number(e.target.value)})}/></label><p>按输入自动选择文生视频、首帧、首尾帧或多参考；不支持的参数会在提交前拦截。原生声音始终开启。</p></>}
+      {node.data.kind==='videoGenerate'&&<VideoInputs doc={doc} nodeId={node.id} assets={state.assets} disabled={locked} capabilities={videoModel?.capabilities} maxAssets={videoModel?.maxReferenceAssets} onAttach={attachInput} onImport={importInput} onRemove={edgeId=>edit({...doc,edges:doc.edges.filter(e=>e.id!==edgeId)})} onMove={(edgeId,delta)=>edit(moveVideoReference(doc,node.id,edgeId,delta))}/>}
       <div className="node-actions"><button disabled={locked||(node.data.kind==='videoGenerate'&&videoParametersDisabled)} onClick={()=>run(node.id)}>运行此节点及必要上游</button>{['textGenerate','imageGenerate','videoGenerate'].includes(node.data.kind)&&<button disabled={locked||(node.data.kind==='videoGenerate'&&videoParametersDisabled)} onClick={()=>run(node.id,true)}>重新生成新版本</button>}</div>
-      <h3>候选版本 · 点击采用</h3>{node.data.versions.map((v,i)=>{const a=state.assets.find(a=>a.id===v.assetId);return <article className={`version-card ${node.data.selectedVersion===v.id?'adopted':''}`} key={v.id}><strong>版本 {i+1}</strong>{a?.kind==='image'?<StudioImagePreview url={a.url} name={a.name}/>:a?.kind==='video'?<video src={a.url} controls preload="metadata"/>:a?.kind==='audio'?<audio src={a.url} controls/>:<p>{a?.text}</p>}<button disabled={locked||node.data.selectedVersion===v.id} onClick={()=>changeNode({selectedVersion:v.id})}>{node.data.selectedVersion===v.id?'已采用':'采用此版本'}</button>{a?.url&&<button onClick={()=>downloadStudio(a.url!,a.name+(a.url!.split('?')[0].match(/\.(png|jpg|webp|mp4|m4a)$/)?.[0]??(a.kind==='image'?'.png':a.kind==='video'?'.mp4':'.m4a'))).catch(e=>setNotice(e.message))}>下载</button>}</article>;})}
+      {(node.data.kind==='videoGenerate'||node.data.kind==='imageInput'&&asset?.kind==='video')&&<button type="button" disabled={locked} onClick={continueShot} title="使用实际尾帧续接下一镜头"><ArrowRightToLine size={16}/>续接下一镜头</button>}
+      <h3>候选版本 · 点击采用</h3>{node.data.versions.map((v,i)=>{const a=state.assets.find(a=>a.id===v.assetId);return <article className={`version-card ${node.data.selectedVersion===v.id?'adopted':''}`} key={v.id}><strong>版本 {i+1}</strong>{a?.kind==='image'?<StudioImagePreview url={a.url} name={a.name}/>:a?.kind==='video'?<video src={a.url} controls preload="metadata"/>:a?.kind==='audio'?<audio src={a.url} controls/>:<p>{a?.text}</p>}<button disabled={locked||node.data.selectedVersion===v.id} onClick={()=>changeNode({selectedVersion:v.id})}>{node.data.selectedVersion===v.id?'已采用':'采用此版本'}</button>{a?.url&&<button onClick={()=>downloadStudio(a.url!,studioAssetDownloadName(a)).catch(e=>setNotice(e.message))}>下载</button>}</article>;})}
       {asset&&<><h3>回写原镜头</h3><select value={sourceAssetId} onChange={e=>setSourceAssetId(e.target.value)}><option value="">选择要更新的原项目镜头</option>{state.assets.filter(a=>a.kind===asset.kind&&['shot-image','shot-video'].includes(a.origin.field||'')&&a.origin.projectId===doc.projectId).map(a=><option key={a.id} value={a.id}>{a.name} · {a.origin.module}</option>)}</select><button disabled={locked||!sourceAssetId} onClick={apply}>确认回写并重新审核</button></>}
     </>:<p>选择节点编辑参数。通过素材库引用一键成片和重制的图片、视频，历史候选不会被覆盖。</p>}
-      <button disabled={locked} onClick={sync}>同步一键成片 / 重制素材</button><h3>最近任务</h3>{state.tasks.filter(t=>t.canvasId===doc.id).slice(0,8).map(t=><article key={t.id} className="task-record"><b>{t.state} · {t.completed}/{t.total}</b><p>{t.message}</p>{t.state==='PAUSED'&&<button disabled={locked} onClick={async()=>{await studioApi('/run',{canvasId:doc.id,nodeId:t.nodeId,requestId:t.id,confirmCost:true});await refresh();}}>恢复原任务</button>}</article>)}
+      <button disabled={locked} onClick={sync}>同步一键成片 / 重制素材</button><h3>最近任务</h3>{state.tasks.filter(t=>t.canvasId===doc.id).slice(0,8).map(t=><article key={t.id} className="task-record"><b>{t.state==='WAITING_PROVIDER'?'等待远端生成':t.state} · {t.completed}/{t.total}</b><p>{t.message}</p>{(t.providerWait||t.state==='FAILED'&&/远端任务 .+ 仍在运行；已保存ID/.test(t.message))&&<button disabled={busy} onClick={async()=>{try{await studioApi('/provider/resume',{taskId:t.id});await refresh();}catch(error){setNotice(error instanceof Error?error.message:'原任务续查失败');}}}>查询原任务并收片</button>}{t.state==='PAUSED'&&!t.providerWait&&<button disabled={locked} onClick={async()=>{await studioApi('/run',{canvasId:doc.id,nodeId:t.nodeId,requestId:t.id,confirmCost:true});await refresh();}}>恢复原任务</button>}</article>)}
     </aside></div>
   </section>;
 }

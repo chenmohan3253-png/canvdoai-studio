@@ -18,6 +18,7 @@ import type {
 } from "../video-studio/types";
 import { estimateSpeechDurationSec, normalizeSpeechCues } from "../video-studio/speech-contract";
 import { videoTargetSize } from "../video-studio/video-specs";
+import {planShotVideoInputs} from '../video-studio/shot-video-inputs';
 
 interface ApiErrorPayload { message?: string; code?: string }
 
@@ -54,7 +55,8 @@ async function ensureSpeechVerificationReady(input: PostproductionRunInput) {
 
 function validateRun(input: PostproductionRunInput) {
   const shots = [...input.preproduction.shots].sort((left, right) => left.shotNumber - right.shotNumber);
-  if (!shots.length || shots.some((shot) => !shot.imageUrl)) throw new Error("请先完成全部分镜图，再运行 06—10。");
+  if (!shots.length || shots.some((shot) => !shot.imageUrl && !shot.videoInputs)) throw new Error("请先完成全部分镜图，再运行 06—10。");
+  for (const shot of shots) planShotVideoInputs(shot,input.projectId);
   const overflowingShot = shots.find((shot) => estimateSpeechDurationSec(normalizeSpeechCues(shot.speechCues, shot.dialogue)) > Math.max(0.8, shot.durationSec - 0.4));
   if (overflowingShot) throw new Error(`镜头 ${String(overflowingShot.shotNumber).padStart(2, "0")} 的必说台词超过可用时长，请延长镜头或拆分台词后再生成。`);
   return { shots, size: videoTargetSize(input.settings.aspectRatio, input.settings.resolution) };
@@ -369,6 +371,10 @@ async function approveQcAndResume(
 }
 
 export const testPostproductionAssistant: PostproductionAssistant = {
+  async extractLastFrame(projectId,clip) {
+    const result=await post<{source:import('../video-studio/shot-video-inputs').ShotMediaSource}>('VIDEO_LAST_FRAME',{projectId,clip});
+    return result.source;
+  },
   generateVideoCandidates,
   regenerateVideoCandidate,
   rewriteVideoPromptForReview,

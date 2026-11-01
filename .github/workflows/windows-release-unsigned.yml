@@ -54,7 +54,9 @@ jobs:
       - name: Verify source and tests
         run: |
           npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package unsigned installer
         shell: pwsh
@@ -70,6 +72,9 @@ jobs:
 
       - name: Verify MCP reconnect after desktop restart
         run: npm run test:mcp
+
+      - name: Verify packaged desktop in isolated data directory
+        run: node scripts/smoke.mjs "release/win-unpacked/CanvDoAI Studio.exe"
 
       - name: Generate checksum
         shell: pwsh
@@ -103,8 +108,8 @@ jobs:
           }
           $notes = "docs/CanvDoAI-Studio-$version-更新说明.md"
           if (Test-Path $notes) {
-            gh release create $tag $installer $checksum --verify-tag --title "CanvDoAI Studio $version" --notes-file $notes
+            gh release create $tag $installer $checksum --verify-tag --title "CanvDoAI Studio $version · 桌面集成测试版" --notes-file $notes
           } else {
-            gh release create $tag $installer $checksum --verify-tag --title "CanvDoAI Studio $version" --generate-notes
+            gh release create $tag $installer $checksum --verify-tag --title "CanvDoAI Studio $version · 桌面集成测试版" --generate-notes
           }
 

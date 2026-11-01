@@ -59,6 +59,7 @@ export async function startLocalServer(options:{dataDir:string;rendererDir:strin
   process.env.CANVDOAI_LOCAL_ORIGIN=origin;
   try {media=await startDramaMedia({dataDir:options.dataDir,origin,workerPath:join(__dirname,'remake-media.mjs')});}
   catch(e){server.close();throw e;}
+  if(process.env.CANVDOAI_MAINTENANCE_READONLY!=='1')studio.resumePendingProviderTasks();
   server.once('close',()=>{media?.stop();studio?.stop();if(!studio?.busy())studio?.store.close();});
   const close=()=>{studio?.stop();media?.stop();server.closeAllConnections();server.close();};
   return {origin,server,close,isBusy:()=>active>0||hasActivePreproductionRuns()||!!studio?.busy(),configure,models:discoverVideoModels,checkpoint:()=>{media?.checkpoint();studio?.store.checkpoint();}};

@@ -192,6 +192,14 @@ export function syncDramaBatch(batchId: string, signal?: AbortSignal) {
   return apiJson<DramaBatch>(`/batches/${encodeURIComponent(batchId)}/sync`, { method: "POST", signal });
 }
 
+export function updateDramaVideoInputs(batchId:string,segmentId:string,input:import('./drama-video-inputs').DramaVideoInputs,signal?:AbortSignal){
+  return apiJson<DramaBatch>(`/batches/${encodeURIComponent(batchId)}/segments/${encodeURIComponent(segmentId)}/video-inputs`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(input),signal});
+}
+
+export function usePreviousDramaTail(batchId:string,segmentId:string,sourceSegmentId:string,sourceJobId:string,signal?:AbortSignal){
+  return apiJson<DramaBatch>(`/batches/${encodeURIComponent(batchId)}/segments/${encodeURIComponent(segmentId)}/tail-as-first`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source_segment_id:sourceSegmentId,source_job_id:sourceJobId}),signal});
+}
+
 export function retryDramaSegment(batchId: string, segmentId: string, signal?: AbortSignal) {
   return apiJson<DramaBatch>(`/batches/${encodeURIComponent(batchId)}/segments/${encodeURIComponent(segmentId)}/retry`, {
     method: "POST",

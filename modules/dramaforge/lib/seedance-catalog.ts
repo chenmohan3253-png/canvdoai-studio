@@ -76,8 +76,10 @@ export const DEMO_SEEDANCE_MODEL: SeedanceCatalogModel = {
 };
 
 export function seedanceModelsFromCatalog(payload: DispatchCatalogPayload) {
-  return (payload.capabilities?.models || []).filter((item) => item.model.toLowerCase().startsWith("seedance") || /^fuliu-intl-(sd20-pro-(480p|720p|1080p|4k)|minimax-h3-(480p|720p))$/.test(item.model));
+  return (payload.capabilities?.models || []).filter((item) => item.model.toLowerCase().startsWith("seedance") || /^fuliu-intl-(sd20-pro-(480p|720p|1080p|4k)|minimax-h3-(480p|720p))$/.test(item.model) || isHiggsfieldUnlimitedModel(item.model)&&item.capabilities.includes('multi_reference'));
 }
+
+export function isHiggsfieldUnlimitedModel(model:string){return model==='wan3_0'||model==='wan3_0_prime';}
 
 export function estimateSeedancePoints(
   model: SeedanceCatalogModel,

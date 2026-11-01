@@ -100,4 +100,18 @@ describe('画布保存与任务提交',()=>{
     expect(within(screen.getByTestId('canvas-nodes')).getAllByText(/片段 \d+\/\d+/).length).toBeGreaterThan(1);
     expect(vi.mocked(studioApi).mock.calls.every(([path])=>path==='/state')).toBe(true);
   });
+  it('续接按钮创建尾帧依赖，不立即调用生成接口',async()=>{
+    const {doc}=document();
+    vi.mocked(studioApi).mockImplementation(async(path)=>{
+      if(path==='/state')return {canvases:[structuredClone(doc)],assets:[],tasks:[]} as any;
+      throw Error('unexpected '+path);
+    });
+    mount(doc);await act(async()=>{});
+    fireEvent.click(screen.getByRole('button',{name:'选择节点 测试视频'}));
+    fireEvent.click(screen.getByRole('button',{name:'续接下一镜头'}));
+    expect(within(screen.getByTestId('canvas-nodes')).getByText('提取视频尾帧')).toBeInTheDocument();
+    expect(screen.getByRole('button',{name:'选择节点 下一镜头'})).toBeInTheDocument();
+    expect(screen.getByLabelText('提示词 / 运镜 / 必说台词')).toHaveValue('');
+    expect(vi.mocked(studioApi).mock.calls.every(([path])=>path==='/state')).toBe(true);
+  });
 });

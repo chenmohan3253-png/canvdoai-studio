@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
 import { DurableStore, atomicWrite } from './store';
-import { defaults, normalizeRemovedVideoProtocol, validateConfig, type DesktopConfig } from './config';
+import { defaults, normalizeRemovedVideoProtocol, validateConfig, videoConnectionConfig, type DesktopConfig } from './config';
 import { installPlaybackPermissions } from './playback-permissions';
 import { VisionDiscovery } from './vision-discovery';
 import { diagnoseApiDirectories } from './api-diagnostics';
@@ -54,6 +54,15 @@ app.whenReady().then(async()=>{
     await writeFile(join(data,'api-diagnostics.json'),JSON.stringify({createdAt:new Date().toISOString(),results},null,2));
     app.quit();return;
   }
+  const connectionArgument=process.argv.find(value=>value.startsWith('--import-video-connection='));
+  if(connectionArgument){
+    const input=readFileSync(connectionArgument.slice('--import-video-connection='.length),'utf8');
+    if(input.length>16384)throw Error('视频配置文件过大');
+    config=validateConfig(videoConnectionConfig(JSON.parse(input.replace(/^\uFEFF/,''))),config);
+    if(!safeStorage.isEncryptionAvailable())throw Error('系统加密服务不可用');
+    atomicWrite(secretPath,safeStorage.encryptString(JSON.stringify(config)).toString('base64'));
+    if(process.argv.includes('--configuration-only')){app.quit();return;}
+  }
   const mediaRoot=app.isPackaged?join(process.resourcesPath,'ffmpeg'):join(app.getAppPath(),'vendor','ffmpeg');
   process.env.CANVDOAI_DATA_DIR=data;
   process.env.FFMPEG_PATH=join(mediaRoot,'ffmpeg.exe');process.env.FFPROBE_PATH=join(mediaRoot,'ffprobe.exe');
@@ -88,6 +97,17 @@ app.whenReady().then(async()=>{
   handle('vision:run',(action:VisionAction,model?:string)=>vision.run(action,model));
   handle('vision:cancel',()=>vision.cancel());
   handle('settings:get',view);
+  handle('settings:import-video',async()=>{
+    if(vision.busy||local.isBusy())throw Error('请等待当前任务结束后导入接口配置');
+    const selected=await dialog.showOpenDialog(window!,{title:'选择视频服务器配置',properties:['openFile'],filters:[{name:'服务器配置',extensions:['json']}]});
+    if(selected.canceled)return null;
+    const input=readFileSync(selected.filePaths[0],'utf8');
+    if(input.length>16384)throw Error('视频配置文件过大');
+    const next=validateConfig(videoConnectionConfig(JSON.parse(input.replace(/^\uFEFF/,''))),config);
+    if(!safeStorage.isEncryptionAvailable())throw Error('系统加密服务不可用');
+    atomicWrite(secretPath,safeStorage.encryptString(JSON.stringify(next)).toString('base64'));
+    config=next;removedLegacyVideoConfig=false;local.configure(config);return view();
+  });
   handle('settings:save',(input:Partial<DesktopConfig>)=>{
     if(vision.busy)throw Error('视觉检测正在进行，请等待或先停止检测，再保存配置。');
     if(local.isBusy())throw Error('有任务正在运行，请完成后再修改接口。');

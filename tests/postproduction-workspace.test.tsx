@@ -28,6 +28,59 @@ const assistant: PostproductionAssistant = {
 
 describe("PostproductionWorkspace", () => {
   beforeEach(() => localStorage.clear());
+  it('selects a new API exposing only first-last-frame capability without requiring image-to-video',async()=>{
+    const source={projectId:'project-new-api',kind:'image' as const,name:'frame',url:'/api/test-ai/assets/first.png',id:'first'};
+    const provider:VideoProviderAssistant={getSession:async()=>({configured:true,baseUrl:'http://another-api.test',models:[{id:'another-vendor-flf',name:'Another vendor',capabilities:['first_last_frame'],resolutions:['1080p'],durationMin:2,durationMax:30,aspectRatios:['9:16']}]}),configure:vi.fn(),clear:vi.fn()};
+    const run=vi.fn(assistant.run);
+    render(<PostproductionWorkspace assistant={{...assistant,run}} videoProviderAssistant={provider} projectId="project-new-api" preproduction={{...preproduction,shots:[{...preproduction.shots[0],videoInputs:{mode:'frames',firstFrame:source,lastFrame:{...source,id:'last',url:'/api/test-ai/assets/last.png'}}}]}} settings={{...settings,videoModelId:'another-vendor-flf'}}/>);
+    await waitFor(()=>expect(screen.getByRole('combobox',{name:'Seedance模型档位'})).toHaveValue('another-vendor-flf'));
+    fireEvent.click(screen.getByRole('button',{name:'用 Seedance 运行 06—10'}));
+    await waitFor(()=>expect(run).toHaveBeenCalledOnce());
+    expect(run.mock.calls[0][0].videoProvider?.model).toBe('another-vendor-flf');
+    expect(run.mock.calls[0][0].preproduction.shots[0].videoInputs?.lastFrame?.id).toBe('last');
+  });
+
+  it('changing shot frame inputs archives only affected output and persists without submitting a new generation',async()=>{
+    const generate=vi.fn(async()=>[makeClip()]);
+    const staged:PostproductionAssistant={...assistant,generateVideoCandidates:generate,regenerateVideoCandidate:vi.fn(),completeApproved:vi.fn()};
+    const props={assistant:staged,projectId:'project-frame-persistence',preproduction,settings,mode:'PRO' as const};
+    const view=render(<PostproductionWorkspace {...props}/>);
+    fireEvent.click(screen.getByRole('button',{name:'生成 06 视频候选'}));
+    await screen.findByText('版本 1');
+    fireEvent.change(screen.getByLabelText('镜头 1 选择尾帧'),{target:{value:'shot-image:shot-1'}});
+    fireEvent.click(screen.getByRole('button',{name:'镜头 1 添加尾帧'}));
+    await waitFor(()=>{
+      const state=JSON.parse(localStorage.getItem('canvdoai.postproduction.project-frame-persistence')!);
+      expect(state.shotOverrides[0].videoInputs.lastFrame.url).toBe('/assets/1.png');
+      expect(state.result.videoCandidates).toHaveLength(0);
+      expect(state.archives[0].result.videoCandidates[0].id).toBe('clip-1');
+    });
+    expect(generate).toHaveBeenCalledOnce();
+    view.unmount();
+    render(<PostproductionWorkspace {...props}/>);
+    expect(screen.getByRole('button',{name:'镜头 1 移除 镜头 1 分镜图'})).toBeInTheDocument();
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it('professional partial input changes reuse other approved shots even when no fast-mode resume adapter exists',async()=>{
+    const second={...makeClip(),id:'clip-second',shotId:'shot-2',shotNumber:2};
+    const generate=vi.fn<NonNullable<PostproductionAssistant['generateVideoCandidates']>>().mockImplementation(async(_input,_progress,existing=[])=>existing.length?[{...makeClip(2)},...existing]:[makeClip(),second]);
+    const staged:PostproductionAssistant={...assistant,generateVideoCandidates:generate,regenerateVideoCandidate:vi.fn(),completeApproved:vi.fn()};
+    const provider:VideoProviderAssistant={getSession:async()=>({configured:true,baseUrl:'http://video.test',models:[{id:'test-video-model',name:'Test',capabilities:['image_to_video','first_last_frame','multi_reference'],resolutions:['1080p'],durationMin:2,durationMax:30,aspectRatios:['9:16']}]}),configure:vi.fn(),clear:vi.fn()};
+    render(<PostproductionWorkspace assistant={staged} videoProviderAssistant={provider} projectId="project-partial-input" preproduction={{...preproduction,shots:[preproduction.shots[0],{...preproduction.shots[0],id:'shot-2',shotNumber:2}]}} settings={{...settings,videoModelId:'test-video-model'}} mode="PRO"/>);
+    await waitFor(()=>expect(screen.getByRole('button',{name:'生成 06 视频候选'})).toBeEnabled());
+    fireEvent.click(screen.getByRole('button',{name:'生成 06 视频候选'}));
+    await screen.findAllByText('版本 1');
+    fireEvent.click(screen.getAllByRole('button',{name:'采用此版本'})[1]);
+    fireEvent.change(screen.getByLabelText('镜头 1 选择尾帧'),{target:{value:'shot-image:shot-1'}});
+    fireEvent.click(screen.getByRole('button',{name:'镜头 1 添加尾帧'}));
+    expect(generate).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button',{name:'生成 06 视频候选'}));
+    await waitFor(()=>expect(generate).toHaveBeenCalledTimes(2));
+    expect(generate.mock.calls[1][2]).toEqual([second]);
+    expect(generate.mock.calls[1][0].preproduction.shots[0].videoInputs?.lastFrame?.url).toBe('/assets/1.png');
+    await waitFor(()=>expect(JSON.parse(localStorage.getItem('canvdoai.postproduction.project-partial-input')!).result.clipApprovals.find((item:any)=>item.shotId==='shot-2')).toMatchObject({status:'APPROVED',selectedCandidateId:'clip-second'}));
+  });
 
   it("完成 06—10 并展示五类交付下载", async () => {
     render(<PostproductionWorkspace assistant={assistant} projectId="project-1" preproduction={preproduction} settings={settings} />);

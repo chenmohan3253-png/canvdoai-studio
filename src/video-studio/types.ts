@@ -310,6 +310,7 @@ export interface PreproductionShot {
   imagePrompt: string;
   imageUrl?: string;
   imageModel?: string;
+  videoInputs?: import('./shot-video-inputs').ShotVideoInputs;
 }
 
 export type SpeechCueKind = "DIALOGUE" | "INNER_MONOLOGUE" | "NARRATION";
@@ -429,6 +430,7 @@ export interface GeneratedVideoClip {
   height: number;
   codec: string;
   generationMode: "IMAGE_TO_VIDEO" | "MOTION_FALLBACK";
+  inputCapability?: 'image_to_video' | 'first_last_frame' | 'multi_reference';
   attempt: number;
   provider?: string;
   providerModel?: string;
@@ -649,6 +651,7 @@ export interface PostproductionCheckpoint {
   durationOverrides: Record<string, number>;
   shotOverrides?: PreproductionShot[];
   archives?: PostproductionArchivedVersion[];
+  videoInputLibrary?: import('./shot-video-inputs').ShotMediaSource[];
 }
 
 export interface RegenerateVideoCandidateInput {
@@ -675,6 +678,7 @@ export interface PostproductionQcAuthorApproval {
 }
 
 export interface PostproductionAssistant {
+  extractLastFrame?(projectId: string, clip: GeneratedVideoClip): Promise<import('./shot-video-inputs').ShotMediaSource>;
   run(
     input: PostproductionRunInput,
     onProgress: (progress: PostproductionProgress) => void,
@@ -683,6 +687,7 @@ export interface PostproductionAssistant {
   generateVideoCandidates?(
     input: PostproductionRunInput,
     onProgress: (progress: PostproductionProgress) => void,
+    existingCandidates?: GeneratedVideoClip[],
   ): Promise<GeneratedVideoClip[]>;
   /** Create another candidate for exactly one shot. It is never auto-approved. */
   regenerateVideoCandidate?(input: RegenerateVideoCandidateInput): Promise<GeneratedVideoClip>;

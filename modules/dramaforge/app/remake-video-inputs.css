@@ -1,0 +1,18 @@
+.remake-media-editor{margin:12px 0;padding:12px 0;border-top:1px solid #505054;min-width:0}
+.remake-media-editor summary{cursor:pointer;font-size:14px}
+.remake-media-editor button{background:#202c32;color:inherit;border:1px solid #627178;border-radius:4px;min-height:30px;padding:5px 9px;font:inherit;cursor:pointer}
+.remake-media-editor button:disabled{opacity:.45;cursor:default}
+.remake-media-modes,.remake-media-upload-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.remake-media-modes button[aria-pressed=true]{outline:1px solid #22b99a}
+.remake-media-upload{display:grid;gap:4px;font-size:12px;min-width:0;max-width:100%}
+.remake-media-upload input{max-width:100%;min-width:0;font-size:12px}
+.remake-media-list{list-style:none;padding:0;display:grid;gap:8px;min-width:0}
+.remake-media-list li{display:grid;grid-template-columns:minmax(0,120px) minmax(0,1fr) auto;align-items:center;gap:8px;border-bottom:1px solid #505054;padding:8px 0;min-width:0}
+.remake-media-list img,.remake-media-list video{width:120px;max-width:100%;height:80px;object-fit:contain}
+.remake-media-list audio{width:120px;max-width:100%;height:40px}
+.remake-media-list span{overflow-wrap:anywhere;font-size:12px}
+.remake-media-list li>div{display:flex;gap:3px}
+.remake-media-list button{width:28px;height:28px;padding:4px;border-radius:4px}
+.remake-media-editor>button{display:inline-flex;align-items:center;gap:6px;border-radius:4px}
+.remake-media-editor [role=alert]{color:#f2aa9d;font-size:12px;overflow-wrap:anywhere}
+@media(max-width:600px){.remake-media-list li{grid-template-columns:minmax(0,1fr) auto}.remake-media-list img,.remake-media-list video,.remake-media-list audio{grid-column:1/-1}}

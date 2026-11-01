@@ -24,6 +24,8 @@ import type {
 } from "./types";
 import { estimateSpeechDurationSec, normalizeSpeechCues, splitSpeechCuesByMaxDuration, subtitleDisplayText } from "./speech-contract";
 import styles from "./VideoStudio.module.css";
+import {planShotVideoInputs,supportsShotVideoInputs,type ShotMediaKind,type ShotMediaSource,type ShotVideoInputs} from './shot-video-inputs';
+import {ShotVideoMediaEditor} from './ShotVideoMediaEditor';
 
 const STAGES: Array<{ code: PostproductionStageCode; number: string; title: string; description: string }> = [
   { code: "VIDEOS", number: "06", title: "视频片段", description: "镜头级并行视频生成" },
@@ -34,6 +36,12 @@ const STAGES: Array<{ code: PostproductionStageCode; number: string; title: stri
 ];
 
 const CONTENT_SAFE_RETRY_INSTRUCTION = "审核优化：保留人物、场景、故事关系和运镜意图；改成影视表演式安全动作，保持安全距离，不呈现真实伤害、接触特写或痛苦表现。";
+
+function clipGenerationLabel(clip: GeneratedVideoClip) {
+  if (clip.generationMode !== 'IMAGE_TO_VIDEO') return '动态样片后备模式';
+  const mode = clip.inputCapability === 'multi_reference' ? '多素材参考' : clip.inputCapability === 'first_last_frame' ? '首尾帧视频' : '图生视频';
+  return `${clip.providerModel ?? '视频模型'} ${mode}${clip.hasEmbeddedAudio ? ' + 原生声音' : ''}`;
+}
 
 function initialStatuses(): Record<PostproductionStageCode, PostproductionStageStatus> {
   return { VIDEOS: "PENDING", AUDIO: "PENDING", QC: "PENDING", COMPOSE: "PENDING", EXPORT: "PENDING" };
@@ -48,6 +56,7 @@ interface SavedState {
   settingsFingerprint?: string;
   durationOverrides: Record<string, number>;
   shotOverrides?: PreproductionShot[];
+  videoInputLibrary?: ShotMediaSource[];
   archives: PostproductionArchivedVersion[];
   updatedAt?: string;
 }
@@ -95,6 +104,7 @@ function loadSavedState(projectId: string, currentSettingsFingerprint: string): 
       settingsFingerprint: saved.settingsFingerprint ?? currentSettingsFingerprint,
       durationOverrides: saved.durationOverrides ?? {},
       shotOverrides: saved.shotOverrides,
+      videoInputLibrary: saved.videoInputLibrary,
       archives: saved.archives ?? [],
       updatedAt: saved.updatedAt,
     };
@@ -145,6 +155,9 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
   const [durationOverrides, setDurationOverrides] = useState<Record<string, number>>(savedState.durationOverrides);
   const [shotOverrides, setShotOverrides] = useState<PreproductionShot[] | undefined>(savedState.shotOverrides);
   const [archives, setArchives] = useState<PostproductionArchivedVersion[]>(savedState.archives);
+  const [videoInputLibrary,setVideoInputLibrary]=useState<ShotMediaSource[]>((savedState.videoInputLibrary??[]).filter(source=>source.projectId===projectId));
+  const [mediaImportBusy,setMediaImportBusy]=useState(false);
+  const mediaPending=useRef(false);
   const [checkpointReady, setCheckpointReady] = useState(!assistant.loadCheckpoint);
   const [durationNotice, setDurationNotice] = useState<string>();
   const [qcDecisionNote, setQcDecisionNote] = useState("");
@@ -212,6 +225,7 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
         setMaxRetries(Math.min(5, Math.max(1, checkpoint.maxRetries ?? 3)));
         setDurationOverrides(checkpoint.durationOverrides ?? {});
         setShotOverrides(checkpoint.shotOverrides);
+        setVideoInputLibrary((checkpoint.videoInputLibrary??[]).filter(source=>source.projectId===projectId));
         setArchives(checkpoint.archives ?? []);
         previousSettingsFingerprint.current = checkpoint.settingsFingerprint;
         localCheckpointUpdatedAt.current = checkpoint.updatedAt;
@@ -230,8 +244,8 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
         if (!active) return;
         setProviderSession(session);
         onProviderSessionChange?.(session);
-        const imageModel = session.models.find((model) => model.id === settings.videoModelId && model.capabilities.includes("image_to_video"))
-          ?? session.models.find((model) => model.capabilities.includes("image_to_video"));
+        const imageModel = session.models.find((model) => model.id === settings.videoModelId && supportsShotVideoInputs(model))
+          ?? session.models.find(supportsShotVideoInputs);
         setProviderModel((current) => session.models.some((model) => model.id === current) ? current : imageModel?.id ?? "");
       })
       .catch((reason) => { if (active) setProviderError(reason instanceof Error ? reason.message : "视频接口状态读取失败。"); })
@@ -240,7 +254,7 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
   }, [onProviderSessionChange, settings.videoModelId, videoProviderAssistant]);
 
   useEffect(() => {
-    if (!settings.videoModelId || !providerSession?.models.some((model) => model.id === settings.videoModelId && model.capabilities.includes("image_to_video"))) return;
+    if (!settings.videoModelId || !providerSession?.models.some((model) => model.id === settings.videoModelId && supportsShotVideoInputs(model))) return;
     setProviderModel(settings.videoModelId);
   }, [providerSession?.models, settings.videoModelId]);
 
@@ -268,21 +282,70 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
   useEffect(() => {
     if (typeof window === "undefined" || !checkpointReady) return;
     try {
-      const empty = Object.keys(result).length === 0 && Object.keys(durationOverrides).length === 0 && !shotOverrides?.length && !archives.length && STAGES.every((stage) => statuses[stage.code] === "PENDING");
+      const empty = Object.keys(result).length === 0 && Object.keys(durationOverrides).length === 0 && !shotOverrides?.length && !videoInputLibrary.length && !archives.length && STAGES.every((stage) => statuses[stage.code] === "PENDING");
       if (empty) durableStorage.removeItem(storageKey(projectId));
       else {
         const updatedAt = new Date().toISOString();
         localCheckpointUpdatedAt.current = updatedAt;
-        const checkpoint: PostproductionCheckpoint = { version: 1, projectId, updatedAt, statuses, messages, result, smartQc, maxRetries, settingsFingerprint: currentSettingsFingerprint, durationOverrides, shotOverrides, archives };
+        const checkpoint: PostproductionCheckpoint = { version: 1, projectId, updatedAt, statuses, messages, result, smartQc, maxRetries, settingsFingerprint: currentSettingsFingerprint, durationOverrides, shotOverrides, videoInputLibrary, archives };
         durableStorage.setItem(storageKey(projectId), JSON.stringify(checkpoint));
         void assistant.saveCheckpoint?.(checkpoint).catch(() => undefined);
       }
     } catch {
       // Production persistence is handled by the host Run/Asset service.
     }
-  }, [archives, assistant, checkpointReady, currentSettingsFingerprint, durationOverrides, maxRetries, messages, projectId, result, shotOverrides, smartQc, statuses]);
+  }, [archives, assistant, checkpointReady, currentSettingsFingerprint, durationOverrides, maxRetries, messages, projectId, result, shotOverrides, smartQc, statuses,videoInputLibrary]);
 
   const selectedProviderModel = providerSession?.models.find((model) => model.id === providerModel);
+  const mediaSources=useMemo(()=>{
+    const sources=[...videoInputLibrary];
+    for(const shot of preproduction?.shots??[]){
+      if(shot.imageUrl)sources.push({id:'shot-image:'+shot.id,projectId,name:`镜头 ${shot.shotNumber} 分镜图`,kind:'image',url:shot.imageUrl});
+      if(shot.videoInputs?.firstFrame)sources.push(shot.videoInputs.firstFrame);
+      if(shot.videoInputs?.lastFrame)sources.push(shot.videoInputs.lastFrame);
+      sources.push(...(shot.videoInputs?.references??[]));
+    }
+    for(const asset of Object.values(preproduction?.assets??{}).flat())if(asset.imageUrl)sources.push({id:'preproduction:'+asset.id,projectId,name:asset.name,kind:'image',url:asset.imageUrl});
+    return [...new Map(sources.filter(source=>source.projectId===projectId).map(source=>[source.id,source])).values()];
+  },[preproduction,projectId,videoInputLibrary]);
+
+  function changeShotMedia(shotId:string,videoInputs:ShotVideoInputs){
+    if(runInFlight.current||busy||regeneratingShotId)throw Error('请等待当前制作任务结束');
+    if(!preproduction)return;
+    const next=preproduction.shots.map(shot=>shot.id===shotId?{...shot,videoInputs}:shot);
+    setShotOverrides(next);onPreproductionChange?.({...preproduction,shots:next});
+    const candidates=result.videoCandidates??result.clips??[];
+    if(candidates.some(clip=>clip.shotId===shotId)||result.composedVideoUrl)setArchives(old=>[{id:crypto.randomUUID(),createdAt:new Date().toISOString(),settingsFingerprint:currentSettingsFingerprint,result},...old].slice(0,10));
+    const failures=(result.videoFailures??[]).filter(failure=>failure.shotId!==shotId);
+    videoFailureGate.current=failures;
+    setResult({videoCandidates:candidates.filter(clip=>clip.shotId!==shotId),clips:(result.clips??[]).filter(clip=>clip.shotId!==shotId),videoFailures:failures,
+      clipApprovals:(result.clipApprovals??[]).map(approval=>approval.shotId===shotId?{shotId,status:'PENDING' as const}:approval),audioTracks:[],subtitleCues:[],timeline:[]});
+    setStatuses(initialStatuses());setMessages({VIDEOS:'镜头素材已修改，旧版本已保留；其他已完成镜头可继续复用。'});setError(undefined);
+  }
+
+  async function importShotMedia(kind:ShotMediaKind){
+    if(mediaPending.current||runInFlight.current||busy||regeneratingShotId)throw Error('请等待当前操作完成');
+    if(!window.desktop?.importMedia)throw Error('请在桌面版导入本机素材');
+    mediaPending.current=true;setMediaImportBusy(true);
+    try{
+      const media=await window.desktop.importMedia();if(!media)return;
+      if(media.kind!==kind)throw Error(kind==='image'?'请选择图片':kind==='video'?'请选择视频':'请选择音频');
+      const source:ShotMediaSource={...media,kind,id:crypto.randomUUID(),projectId};
+      setVideoInputLibrary(old=>[...old,source]);return source;
+    }finally{mediaPending.current=false;setMediaImportBusy(false);}
+  }
+
+  async function continueFromClip(clip:GeneratedVideoClip){
+    if(mediaPending.current||runInFlight.current||busy||regeneratingShotId)throw Error('请等待当前操作完成');
+    if(!assistant.extractLastFrame)throw Error('当前适配器不支持尾帧提取');
+    mediaPending.current=true;setMediaImportBusy(true);
+    try{
+      await assistant.saveCheckpoint?.({version:1,projectId,updatedAt:new Date().toISOString(),statuses,messages,result,smartQc,maxRetries,settingsFingerprint:currentSettingsFingerprint,durationOverrides,shotOverrides,videoInputLibrary,archives});
+      const source=await assistant.extractLastFrame(projectId,clip);
+      if(source.projectId!==projectId||source.kind!=='image'||source.derivation?.sourceClipId!==clip.id)throw Error('尾帧来源校验失败');
+      setVideoInputLibrary(old=>[...old,source]);return source;
+    }finally{mediaPending.current=false;setMediaImportBusy(false);}
+  }
   const overflowingSpeech = useMemo(() => {
     if (!preproduction) return undefined;
     for (const shot of [...preproduction.shots].sort((left, right) => left.shotNumber - right.shotNumber)) {
@@ -364,8 +427,8 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
       onProviderSessionChange?.(session);
       setProviderKey("");
       setUseSeedance(true);
-      const imageModel = session.models.find((model) => model.id === settings.videoModelId && model.capabilities.includes("image_to_video"))
-        ?? session.models.find((model) => model.capabilities.includes("image_to_video"));
+      const imageModel = session.models.find((model) => model.id === settings.videoModelId && supportsShotVideoInputs(model))
+        ?? session.models.find(supportsShotVideoInputs);
       setProviderModel(imageModel?.id ?? "");
     } catch (reason) {
       setProviderError(reason instanceof Error ? reason.message : "视频接口授权失败。");
@@ -408,8 +471,14 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
   }
 
   async function run(forceVideoRegeneration = false) {
+    if(mediaPending.current){setError('素材正在导入或提取，请稍后再运行');return;}
     if (runInFlight.current || busy) return;
-    const checkpointClips = result.clips ?? result.videoCandidates ?? [];
+    const checkpointClips = (preproduction?.shots??[]).map(shot=>{
+      const selectedId=result.clipApprovals?.find(approval=>approval.shotId===shot.id&&approval.status==='APPROVED')?.selectedCandidateId;
+      return result.clips?.find(clip=>clip.shotId===shot.id)
+        ??result.videoCandidates?.find(clip=>clip.id===selectedId)
+        ??result.videoCandidates?.filter(clip=>clip.shotId===shot.id).sort((a,b)=>b.attempt-a.attempt)[0];
+    }).filter((clip):clip is GeneratedVideoClip=>Boolean(clip));
     const recoveryOnly = Boolean(
       preproduction?.shots.length
       && checkpointClips.length === preproduction.shots.length
@@ -422,10 +491,16 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
       setPendingAutoStart(true);
       return;
     }
-    if (!preproduction || !preproduction.shots.length || preproduction.shots.some((shot) => !shot.imageUrl)) {
+    if (!preproduction || !preproduction.shots.length || preproduction.shots.some((shot) => !shot.imageUrl && !shot.videoInputs)) {
       setError("请先完成 01—05，并确保每个镜头都有分镜图。");
       return;
     }
+    try {for (const shot of preproduction.shots) {
+      const plan=planShotVideoInputs(shot,projectId);
+      if(shot.videoInputs&&(!useSeedance||!providerModel))throw Error('请先选择支持首尾帧或参考素材的视频模型');
+      if(selectedProviderModel&&!selectedProviderModel.capabilities.includes(plan.capability))throw Error('当前模型不支持 '+plan.capability);
+    }}
+    catch (reason) {setError(reason instanceof Error ? reason.message : '视频素材配置无效');return;}
     const unresolvedVideoFailures = (result.videoFailures ?? []).filter((failure) => !checkpointClips.some((clip) => clip.shotId === failure.shotId));
     const gatedFailures = unresolvedVideoFailures.length ? unresolvedVideoFailures : videoFailureGate.current;
     if (gatedFailures.length && !forceVideoRegeneration) {
@@ -440,7 +515,7 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
     const input = buildRunInput();
     if (!input) return;
     const hasReusableCheckpoint = !forceVideoRegeneration
-      && Boolean(assistant.resume)
+      && Boolean(mode === 'PRO' ? assistant.generateVideoCandidates : assistant.resume)
       && checkpointClips.some((clip) => preproduction.shots.some((shot) => shot.id === clip.shotId));
     if (!hasReusableCheckpoint) {
       if (forceVideoRegeneration && Object.keys(result).length > 0) {
@@ -476,8 +551,11 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
     };
     try {
       if (mode === "PRO") {
-        const candidates = await assistant.generateVideoCandidates!(input, onProgress);
-        const clipApprovals: VideoClipApproval[] = preproduction.shots.map((shot) => ({ shotId: shot.id, status: "PENDING" }));
+        const candidates = hasReusableCheckpoint ? await assistant.generateVideoCandidates!(input,onProgress,checkpointClips) : await assistant.generateVideoCandidates!(input,onProgress);
+        const clipApprovals: VideoClipApproval[] = preproduction.shots.map(shot=>{
+          const previous=result.clipApprovals?.find(approval=>approval.shotId===shot.id);
+          return hasReusableCheckpoint&&previous?.status==='APPROVED'&&candidates.some(clip=>clip.id===previous.selectedCandidateId)?previous:{shotId:shot.id,status:'PENDING'};
+        });
         setResult({ videoCandidates: candidates, clipApprovals, clips: [], audioTracks: [], subtitleCues: [], timeline: [] });
         setStatuses({ VIDEOS: "WAITING_ACTION", AUDIO: "PENDING", QC: "PENDING", COMPOSE: "PENDING", EXPORT: "PENDING" });
         setMessages({ VIDEOS: `等待作者逐镜确认 · 0/${preproduction.shots.length} 已采用` });
@@ -585,6 +663,7 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
   }
 
   async function regenerateShot(shotId: string, instructionOverride?: string, shotOverride?: PreproductionShot) {
+    if(mediaPending.current){setError('素材正在导入或提取，请稍后再运行');return;}
     const input = buildRunInput();
     const shot = shotOverride ?? preproduction?.shots.find((item) => item.id === shotId);
     if (!input || !shot || !assistant.regenerateVideoCandidate) {
@@ -934,7 +1013,7 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
           {providerSession?.configured ? (
             <div className={styles.providerConfigured}>
               <label><input type="checkbox" checked={useSeedance} disabled={busy || Boolean(regeneratingShotId) || providerBusy} onChange={(event) => setUseSeedance(event.target.checked)} /><span>06 全部镜头由 Seedance 一次生成画面 + 原生声音</span></label>
-              <label><span>模型档位</span><select aria-label="Seedance模型档位" value={providerModel} disabled={busy || Boolean(regeneratingShotId) || providerBusy || Boolean(settings.videoModelId)} onChange={(event) => setProviderModel(event.target.value)}>{providerSession.models.filter((model) => model.capabilities.includes("image_to_video")).map((model) => <option key={model.id} value={model.id}>{model.name} · {model.id}</option>)}</select></label>
+              <label><span>模型档位</span><select aria-label="Seedance模型档位" value={providerModel} disabled={busy || Boolean(regeneratingShotId) || providerBusy || Boolean(settings.videoModelId)} onChange={(event) => setProviderModel(event.target.value)}>{providerSession.models.filter(supportsShotVideoInputs).map((model) => <option key={model.id} value={model.id}>{model.name} · {model.id}</option>)}</select></label>
               <div className={styles.providerMetrics}>
                 <span>剩余额度<strong>{providerSession.usage?.remainingPoints == null ? "不限额" : providerSession.usage.remainingPoints.toLocaleString()}</strong></span>
                 <span>本次预估<strong>{providerEstimate ? `${providerEstimate.points.toLocaleString()} 点` : "接口结算"}</strong></span>
@@ -1014,6 +1093,15 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
         </section>
       ) : null}
 
+      {preproduction?.shots.length?<div className={styles.postSection}>
+        <div className={styles.postSectionHead}><div><span>镜头输入</span><strong>首尾帧与参考素材</strong></div></div>
+        {[...preproduction.shots].sort((a,b)=>a.shotNumber-b.shotNumber).map((shot,index,shots)=>{
+          const previous=shots[index-1];
+          const previousClips=previous?[...new Map([...(result.videoCandidates??[]),...(result.clips??[])].filter(clip=>clip.shotId===previous.id).map(clip=>[clip.id,clip])).values()].sort((a,b)=>b.attempt-a.attempt):[];
+          return <details key={shot.id} className="shot-media-entry"><summary>镜头 {String(shot.shotNumber).padStart(2,'0')} · {shot.videoInputs?.mode==='references'?'参考素材':shot.videoInputs?.lastFrame?'首尾帧':'首帧'}</summary><ShotVideoMediaEditor projectId={projectId} shot={shot} sources={mediaSources} disabled={busy||mediaImportBusy||Boolean(regeneratingShotId)||!checkpointReady} capabilities={selectedProviderModel?.capabilities} maxAssets={selectedProviderModel?.maxReferenceAssets} previousClips={previousClips} onChange={value=>changeShotMedia(shot.id,value)} onImport={importShotMedia} onLastFrame={assistant.extractLastFrame?continueFromClip:undefined}/></details>;
+        })}
+      </div>:null}
+
       {archives.length ? (
         <div className={`${styles.postSection} ${styles.archivedVersions}`}>
           <div className={styles.postSectionHead}><div><span>已保留的历史视频版本</span><strong>{archives.length} 个检查点不会因改规格或重跑而删除</strong></div><small>历史片段只供查看和下载，不会混入当前规格的成片。</small></div>
@@ -1059,7 +1147,7 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
                           <video controls preload="metadata" poster={clip.posterUrl} src={clip.videoUrl} />
                           <div><strong>镜头 {String(clip.shotNumber).padStart(2, "0")}</strong><span>{clip.durationSec} 秒 · {clip.width}×{clip.height}</span></div>
                           {selected ? renderClipQcBadge(shot.id) : null}
-                          <small>{clip.generationMode === "IMAGE_TO_VIDEO" ? `${clip.providerModel ?? "Seedance"} 图生视频${clip.hasEmbeddedAudio ? " + 原生声音" : ""}` : "动态样片后备模式"} · 第 {clip.attempt} 次</small>
+                          <small>{clipGenerationLabel(clip)} · 第 {clip.attempt} 次</small>
                           {clip.providerJobId ? <small>任务 {clip.providerJobId.slice(0, 8)}… · 源 {clip.sourceResolution ?? "自动"}</small> : null}
                           <div className={styles.candidateActions}>
                             <button type="button" disabled={busy || Boolean(regeneratingShotId) || selected} onClick={() => updateApproval(shot.id, clip.id, "APPROVED")}>{selected ? "已采用此版本" : "采用此版本"}</button>
@@ -1081,7 +1169,7 @@ export function PostproductionWorkspace({ assistant, projectId, preproduction: s
           </div>
           </> : <div className={styles.clipGrid}>{clips.map((clip) => {
             const clipIssues = qcIssuesByShot.get(clip.shotId) ?? [];
-            return <article key={clip.id} ref={(node) => { if (node) clipCardRefs.current[clip.shotId] = node; }} tabIndex={-1} className={clipIssues.length ? styles.clipQcProblem : ""} data-qc-severity={clipIssues.some((issue) => issue.severity === "ERROR") ? "ERROR" : "WARNING"}><video controls preload="metadata" poster={clip.posterUrl} src={clip.videoUrl} /><div><strong>镜头 {String(clip.shotNumber).padStart(2, "0")}</strong><span>{clip.durationSec} 秒 · {clip.width}×{clip.height}</span></div>{renderClipQcBadge(clip.shotId)}<small>{clip.generationMode === "IMAGE_TO_VIDEO" ? `${clip.providerModel ?? "Seedance"} 图生视频${clip.hasEmbeddedAudio ? " + 原生声音" : ""}` : "动态样片后备模式"} · 第 {clip.attempt} 次</small>{clip.providerJobId ? <small>任务 {clip.providerJobId.slice(0, 8)}… · 源 {clip.sourceResolution ?? "自动"}</small> : null}<button type="button" className={styles.clipRegenerate} disabled={busy || Boolean(regeneratingShotId) || !assistant.regenerateVideoCandidate} onClick={() => void regenerateShot(clip.shotId)}>{regeneratingShotId === clip.shotId ? "正在重新生成此视频…" : "重新生成此视频"}</button><a href={clip.videoUrl} download={`shot-${clip.shotNumber}.mp4`}>下载片段</a></article>;
+            return <article key={clip.id} ref={(node) => { if (node) clipCardRefs.current[clip.shotId] = node; }} tabIndex={-1} className={clipIssues.length ? styles.clipQcProblem : ""} data-qc-severity={clipIssues.some((issue) => issue.severity === "ERROR") ? "ERROR" : "WARNING"}><video controls preload="metadata" poster={clip.posterUrl} src={clip.videoUrl} /><div><strong>镜头 {String(clip.shotNumber).padStart(2, "0")}</strong><span>{clip.durationSec} 秒 · {clip.width}×{clip.height}</span></div>{renderClipQcBadge(clip.shotId)}<small>{clipGenerationLabel(clip)} · 第 {clip.attempt} 次</small>{clip.providerJobId ? <small>任务 {clip.providerJobId.slice(0, 8)}… · 源 {clip.sourceResolution ?? "自动"}</small> : null}<button type="button" className={styles.clipRegenerate} disabled={busy || Boolean(regeneratingShotId) || !assistant.regenerateVideoCandidate} onClick={() => void regenerateShot(clip.shotId)}>{regeneratingShotId === clip.shotId ? "正在重新生成此视频…" : "重新生成此视频"}</button><a href={clip.videoUrl} download={`shot-${clip.shotNumber}.mp4`}>下载片段</a></article>;
           })}</div>}
         </div>
       ) : null}

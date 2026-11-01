@@ -36,6 +36,6 @@ export async function diagnoseApiDirectories(config:DesktopConfig,fetcher:typeof
     probe('图片/分镜模型目录',config.imageBase||chatBase,config.imageKey||chatKey,'/models',fetcher),
     probe('视觉分析模型目录',config.visionBase||chatBase,config.visionKey||chatKey,'/models',fetcher),
     probe('语音转写模型目录',config.transcriptionBase||chatBase,config.transcriptionKey||chatKey,'/models',fetcher),
-    probe('视频能力目录',config.videoBase||'',config.videoKey||'','/v1/providers/capabilities',fetcher),
+    probe('视频能力目录',config.videoProtocol==='jijiu'?(config.videoBase||'').replace(/\/v1\/?$/,''):config.videoBase||'',config.videoKey||'',config.videoProtocol==='jijiu'?'/v1/models':'/v1/providers/capabilities',fetcher),
   ]);
 }

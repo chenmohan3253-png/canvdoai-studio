@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   settings:()=>ipcRenderer.invoke('settings:get'),
   saveSettings:(input:unknown)=>ipcRenderer.invoke('settings:save',input),
+  importVideoConnection:()=>ipcRenderer.invoke('settings:import-video'),
   testConnection:(kind:string)=>ipcRenderer.invoke('settings:test',kind),
   visionReport:()=>ipcRenderer.invoke('vision:report'),
   runVision:(action:VisionAction,model?:string)=>ipcRenderer.invoke('vision:run',action,model),

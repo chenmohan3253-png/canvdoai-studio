@@ -59,7 +59,7 @@ export function registerDramaRoutes(routes: Server) {
         const handler=(entry.handlers as any)[req.method||'GET'];
         if(!handler) {res.writeHead(405);res.end();return;}
         const params=Object.fromEntries(names.map((name,i)=>[name,decodeURIComponent(match[i+1])]));
-        const maxBody=path.includes('/parts/')?32*1024*1024:path.endsWith('/assets')?30*1024*1024:2*1024*1024;
+        const maxBody=path.includes('/parts/')?32*1024*1024:path.endsWith('/assets')?101*1024*1024:2*1024*1024;
         if(Number(req.headers['content-length']||0)>maxBody) {res.writeHead(413);res.end();return;}
         const headers=new Headers();
         for(const [k,v] of Object.entries(req.headers)) if(typeof v==='string') headers.set(k,v);

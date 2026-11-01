@@ -13,10 +13,10 @@ describe('视频提示词额度工具',()=>{
 
   it('Wan 能力目录报告 5000 字符时允许 4800 字符正文，4500 不是软件固定上限',()=>{
     const usage=videoPromptUsage('镜'.repeat(4800),[],5000);
-    expect(usage.suffixChars).toBe(35);
-    expect(usage.used).toBe(4835);
+    expect(usage.suffixChars).toBe(VIDEO_PROMPT_SUFFIX.length);
+    expect(usage.used).toBe(4800+VIDEO_PROMPT_SUFFIX.length);
     expect(usage.overBy).toBe(0);
-    expect(videoPromptUsage('镜'.repeat(4800),[],4500).overBy).toBe(335);
+    expect(videoPromptUsage('镜'.repeat(4800),[],4500).overBy).toBe(300+VIDEO_PROMPT_SUFFIX.length);
   });
 
   it('安全压缩只清理重复行和平台已经附加的约束',()=>{

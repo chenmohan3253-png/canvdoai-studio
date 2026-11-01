@@ -18,12 +18,26 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
         const name=path.slice('/api/studio/media/'.length),file=engine.mediaPath(name),info=await stat(file),range=req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);let start=0,end=info.size-1;
         if(req.headers.range&&!range){res.writeHead(416);res.end();return;}
         if(range){if(!range[1])start=Math.max(0,info.size-Number(range[2]));else{start=Number(range[1]);if(range[2])end=Math.min(end,Number(range[2]));}if(start>end||!Number.isSafeInteger(start)||start<0){res.writeHead(416,{'content-range':`bytes */${info.size}`});res.end();return;}}
-        res.writeHead(range?206:200,{'content-type':name.endsWith('.mp4')?'video/mp4':name.endsWith('.m4a')?'audio/mp4':name.endsWith('.mp3')?'audio/mpeg':name.endsWith('.jpg')?'image/jpeg':name.endsWith('.webp')?'image/webp':'image/png','accept-ranges':'bytes','content-length':String(end-start+1),...(range?{'content-range':`bytes ${start}-${end}/${info.size}`}:{})});await pipeline(createReadStream(file,{start,end}),res);return;
+        res.writeHead(range?206:200,{'content-type':name.endsWith('.mp4')?'video/mp4':name.endsWith('.m4a')?'audio/mp4':name.endsWith('.mp3')?'audio/mpeg':name.endsWith('.wav')?'audio/wav':name.endsWith('.jpg')?'image/jpeg':name.endsWith('.webp')?'image/webp':'image/png','accept-ranges':'bytes','content-length':String(end-start+1),...(range?{'content-range':`bytes ${start}-${end}/${info.size}`}:{})});await pipeline(createReadStream(file,{start,end}),res);return;
       }
       if(req.method==='GET'&&path==='/api/studio/state'){
         const projectId=url.searchParams.get('projectId'),canvases=engine.store.list<CanvasDocument>('canvas').filter(c=>!projectId||c.projectId===projectId);
         const ids=new Set(canvases.map(c=>c.id));
         json({projects:engine.store.projects(),archivedProjects:engine.store.archivedProjects(),canvases,assets:engine.store.assets().filter(a=>!projectId||(a.libraryScope!=='shared'&&a.origin.projectId===projectId)),tasks:engine.store.list<CanvasTask>('canvas-task').filter(t=>!projectId||ids.has(t.canvasId)).slice(0,200)});return;
+      }
+      if(req.method==='GET'&&path==='/api/studio/video/prepare'){
+        json(await engine.prepareVideoRequest(url.searchParams.get('canvasId')||'',url.searchParams.get('nodeId')||''));return;
+      }
+      if(req.method==='GET'&&path==='/api/studio/video/route-limits'){
+        json(await engine.videoRouteLimits(url.searchParams.get('modelId')||''));return;
+      }
+      if(req.method==='GET'&&path==='/api/studio/provider/form-unlink'){
+        if([...url.searchParams.keys()].some(key=>key!=='maintenanceJobId'))throw Error('仅接受 maintenanceJobId');
+        json(await engine.getProviderFormUnlink(url.searchParams.get('maintenanceJobId')));return;
+      }
+      if(req.method==='GET'&&path==='/api/studio/provider/receipt-inspection'){
+        if([...url.searchParams.keys()].some(key=>key!=='inspectionId'))throw Error('仅接受 inspectionId');
+        json(await engine.inspectProviderSubmission({inspectionId:url.searchParams.get('inspectionId')},true));return;
       }
       if(req.method==='GET'&&path.startsWith('/api/studio/export/')){const bytes=await exportCanvas(engine,path.split('/').at(-1)!);res.writeHead(200,{'content-type':'application/zip','content-disposition':'attachment; filename="CanvDoAI-canvas.zip"'});res.end(bytes);return;}
       if(!['POST','PUT'].includes(req.method||'')){json({message:'接口不存在'},404);return;}
@@ -42,10 +56,17 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
         const webp=bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP';
         const mp4=bytes.toString('ascii',4,8)==='ftyp';
         const mp3=bytes.toString('ascii',0,3)==='ID3'||(bytes[0]===255&&(bytes[1]&0xe0)===0xe0);
-        if(kind==='image'&&!(png||jpeg||webp)||kind==='video'&&!mp4||kind==='audio'&&!(mp3||mp4))throw Error('素材格式与声明类型不符；支持 PNG/JPEG/WebP、MP4、MP3/M4A');
+        const wav=bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WAVE';
+        if(kind==='image'&&!(png||jpeg||webp)||kind==='video'&&!mp4||kind==='audio'&&!(mp3||mp4||wav))throw Error('素材格式与声明类型不符；支持 PNG/JPEG/WebP、MP4、MP3/M4A/WAV');
         json(await engine.addAsset({name,kind,bytes,origin:{module:'import',projectId}}),201);return;
       }
       const input=bytes.length?JSON.parse(bytes.toString()):{};
+      if(path==='/api/studio/provider/receipt-inspection'){
+        json(await engine.inspectProviderSubmission(input));return;
+      }
+      if(path==='/api/studio/provider/form-unlink'){
+        json(await engine.unlinkProviderForm(input));return;
+      }
       if(path==='/api/studio/project'){json(engine.store.createProject(input.name),201);return;}
       if(path==='/api/studio/project/archive'){
         if(input.confirmDelete!==true||typeof input.projectId!=='string'||typeof input.projectName!=='string')throw Error('请确认项目 ID 和完整名称后再删除');
@@ -69,6 +90,10 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
         if(typeof input.sharedAssetId!=='string'||typeof input.targetProjectId!=='string')throw Error('请提供总库素材和目标项目');
         json(engine.store.referenceSharedAsset(input.sharedAssetId,input.targetProjectId),201);return;
       }
+      if(path==='/api/studio/asset/last-frame'){
+        if(typeof input.assetId!=='string'||typeof input.projectId!=='string')throw Error('请提供来源视频和项目 ID');
+        json(await engine.lastFrame(input.assetId,input.projectId),201);return;
+      }
       if(path==='/api/studio/canvas/create'){
         if(typeof input.projectId!=='string'||!engine.store.projects().some(project=>project.id===input.projectId))throw Error('项目不存在，请先新建或选择项目');
         if(!WORKFLOW_TEMPLATES.some(template=>template.id===input.templateId))throw Error('未知画布工作流模板');
@@ -81,10 +106,14 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
       }
       if(path==='/api/studio/canvas'){
         if(typeof input.projectId!=='string'||!engine.store.projects().some(project=>project.id===input.projectId))throw Error('项目不存在，请先新建或选择项目');
-        if(engine.store.list<CanvasTask>('canvas-task').some(t=>t.canvasId===input.id&&['QUEUED','RUNNING'].includes(t.state)))throw Error('运行期间画布已锁定，请等待当前任务完成');
+        if(engine.store.list<CanvasTask>('canvas-task').some(t=>t.canvasId===input.id&&['QUEUED','RUNNING','WAITING_PROVIDER'].includes(t.state)))throw Error('运行期间画布已锁定，请等待当前任务完成');
         const error=validateGraph(input,engine.store.assets());if(error)throw Error(error);json(engine.store.saveCanvas(input,Number(input.revision)));return;
       }
       if(path==='/api/studio/run'){if(input.confirmCost!==true)throw Error('请确认本次生成可能消耗API额度');json(engine.run(input.canvasId,input.nodeId,input.force===true,input.requestId||randomUUID()));return;}
+      if(path==='/api/studio/provider/resume'){
+        if(Object.keys(input).some(key=>key!=='taskId')||typeof input.taskId!=='string'||!input.taskId)throw Error('仅续查入口只接受原 taskId，不支持 force 或新生成');
+        json(engine.resumeProviderTask(input.taskId));return;
+      }
       if(path==='/api/studio/sync-assets'){json(await syncModuleAssets(engine,legacy));return;}
       if(path==='/api/studio/asset'){
         if(!['image','video','audio','text'].includes(input.kind))throw Error('未知素材类型');

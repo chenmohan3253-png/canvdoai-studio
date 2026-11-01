@@ -18,11 +18,14 @@ function fixture(){
 }
 async function ready(){await screen.findByText('等待手动检测');}
 describe('视觉模型选择界面',()=>{
-  it('视频设置只保留 Dispatch / Seedance，不再显示伏流海外协议',async()=>{
+  it('视频设置可选择 Dispatch 或极九，且不再显示伏流海外协议',async()=>{
     fixture();render(<Settings/>);await ready();
     expect(screen.queryByText(/伏流海外/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('接口协议')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('接口协议')).toHaveValue('dispatch');
     expect(screen.getByText('Dispatch / Seedance · /v1/video-jobs')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('接口协议'),{target:{value:'jijiu'}});
+    expect(screen.getByText('极九 Seedance · /v1/videos')).toBeInTheDocument();
+    expect(screen.getByLabelText('参考素材上传服务 Base URL')).toBeInTheDocument();
     expect(screen.getByLabelText('视频 API Key')).toBeInTheDocument();
   });
   it('旧伏流配置被停用时给出重新填写提示',async()=>{

@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {jijiuCreateBody,normalizeJijiuCatalog,normalizeJijiuJob} from './jijiu-adapter';
 export const FULIU_RATIOS=['16:9','9:16','4:3','3:4','1:1','21:9'];
 export function fuliuSpec(id:string){
   const match=/^fuliu-intl-(sd20-pro|minimax-h3)-(480p|720p|1080p|4k)$/.exec(id);
@@ -89,10 +90,29 @@ export function wanCreateBody(input:any){
 }
 export async function videoGatewayFetch(config:Record<string,string>,path:string,init:RequestInit={},fetcher:typeof fetch=fetch):Promise<Response>{
   const fuliu=config.videoProtocol==='fuliu';
+  const jijiu=config.videoProtocol==='jijiu';
   let base=config.videoBase.replace(/\/+$/,''),key=config.videoKey,route=path,body=init.body;
   const headers=new Headers(init.headers);headers.delete('authorization');
   let map:((value:any)=>any)|undefined;
-  if(!fuliu&&path==='/v1/video-jobs'&&(init.method??'GET').toUpperCase()==='POST'){
+  if(jijiu){
+    if(base.endsWith('/v1'))base=base.slice(0,-3);
+    if(path==='/v1/models')route='/v1/models';
+    else if(path==='/v1/providers/capabilities'){route='/v1/models';map=normalizeJijiuCatalog;}
+    else if(path==='/v1/usage'){route='/api/usage/token/';map=payload=>({remaining_points:null,quota_points:null,used_points:undefined,billing_source:'jijiu',token_usage:payload?.data??null});}
+    else if(path==='/v1/assets'){
+      if(!config.assetUploadBase)throw Error('JIJIU_ASSET_UPLOAD_REQUIRED：极九视频线路只接受公网 HTTPS 参考素材 URL。请配置独立素材上传服务，不会将极九 Key 发送给该服务。');
+      base=config.assetUploadBase.replace(/\/+$/,'');key=config.assetUploadKey||'';route='/v1/assets';
+    }else if(path==='/v1/video-jobs'){
+      route='/v1/videos';map=payload=>normalizeJijiuJob(payload,base);
+      if((init.method||'GET').toUpperCase()==='POST'){
+        const input=JSON.parse(String(init.body||'{}'));headers.set('content-type','application/json');body=JSON.stringify(jijiuCreateBody(input));
+      }
+    }else if(path.startsWith('/v1/video-jobs/')){
+      const id=path.slice('/v1/video-jobs/'.length);if(!id||id.includes('/'))throw Error('极九任务 ID 无效');
+      route='/v1/videos/'+encodeURIComponent(decodeURIComponent(id));map=payload=>normalizeJijiuJob(payload,base);
+    }else throw Error('极九适配器不支持此接口：'+path);
+  }
+  if(!jijiu&&!fuliu&&path==='/v1/video-jobs'&&(init.method??'GET').toUpperCase()==='POST'){
     const input=JSON.parse(String(init.body??'{}'));
     if(typeof input.model==='string'&&input.model.startsWith('wan-3.0')){
       route='/api/v1/services/aigc/video-generation/video-synthesis';
@@ -101,7 +121,7 @@ export async function videoGatewayFetch(config:Record<string,string>,path:string
       body=JSON.stringify(wanCreateBody(input));
       map=normalizeWanJob;
     }
-  }else if(!fuliu&&path.startsWith(WAN_TASK_PREFIX)){
+  }else if(!jijiu&&!fuliu&&path.startsWith(WAN_TASK_PREFIX)){
     const id=path.slice(WAN_TASK_PREFIX.length);
     if(!id||id.includes('/'))throw Error('Wan 任务 ID 无效');
     route='/api/v1/tasks/'+id;

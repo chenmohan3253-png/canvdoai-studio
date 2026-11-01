@@ -10,6 +10,10 @@ function assetIdentity(asset:StudioAsset|undefined,id?:string){
   return content?[asset.kind,content]:[asset.kind,asset.id];
 }
 export function nodeFingerprints(node:CanvasNode,inputs:NodeInput[],config:Record<string,string>,ownAsset?:StudioAsset){
+  if(node.data.kind==='videoLastFrame'){
+    const value='v2:'+digest({kind:'videoLastFrame',algorithm:'last-decoded-frame-v1',inputs:inputs.map(input=>[input.slot,assetIdentity(input.asset)])});
+    return {current:value,legacy:value};
+  }
   const parameters={kind:node.data.kind,prompt:node.data.prompt,assetId:node.data.assetId,model:node.data.model||config[node.data.kind==='textGenerate'?'textModel':'imageModel'],size:node.data.size,duration:node.data.duration,resolution:node.data.resolution,aspectRatio:node.data.aspectRatio,seed:node.data.seed};
   return {
     legacy:digest({...parameters,inputs:inputs.map(i=>[i.slot,i.asset.id])}),

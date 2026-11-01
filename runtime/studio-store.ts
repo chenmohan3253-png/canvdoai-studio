@@ -39,7 +39,7 @@ export class StudioStore {
     const canvases=this.list<CanvasDocument>('canvas').filter(item=>item.projectId===id);
     const canvasIds=new Set(canvases.map(item=>item.id));
     const tasks=this.list<CanvasTask>('canvas-task').filter(item=>canvasIds.has(item.canvasId));
-    if(tasks.some(item=>['QUEUED','RUNNING'].includes(item.state)))throw Error('项目仍有运行中任务，请等待任务结束后再删除');
+    if(tasks.some(item=>['QUEUED','RUNNING','WAITING_PROVIDER'].includes(item.state)))throw Error('项目仍有运行中任务，请等待任务结束后再删除');
     const otherAssetIds=new Set(this.list<CanvasDocument>('canvas').filter(item=>!canvasIds.has(item.id)).flatMap(item=>item.nodes.flatMap(node=>[node.data.assetId,...node.data.versions.map(version=>version.assetId)]).filter(Boolean)));
     const assets=this.assets().filter(item=>item.libraryScope!=='shared'&&item.origin.projectId===id&&['canvas','import'].includes(item.origin.module)&&!otherAssetIds.has(item.id));
     const deletedAt=new Date().toISOString();
@@ -71,7 +71,7 @@ export class StudioStore {
       if(!source)throw Error('源画布不存在');
       const invalid=validateGraph(source,this.assets());if(invalid)throw Error(`源画布不可复制：${invalid}`);
       if(!this.projects().some(project=>project.id===targetProjectId))throw Error('目标项目不存在');
-      if(this.list<CanvasTask>('canvas-task').some(task=>task.canvasId===sourceCanvasId&&['QUEUED','RUNNING'].includes(task.state)))throw Error('源画布仍有运行任务，请等待完成再复制');
+      if(this.list<CanvasTask>('canvas-task').some(task=>task.canvasId===sourceCanvasId&&['QUEUED','RUNNING','WAITING_PROVIDER'].includes(task.state)))throw Error('源画布仍有运行任务，请等待完成再复制');
       const now=new Date().toISOString(),assetIds=new Map<string,string>(),nodeIds=new Map(source.nodes.map(node=>[node.id,randomUUID()]));
       const copyAsset=(oldId:string|undefined)=>{
         if(!oldId)return oldId;
@@ -162,7 +162,7 @@ export class StudioStore {
     this.assertProjectAssets(doc);
     const value={...doc,revision:expectedRevision+1,updatedAt:new Date().toISOString()};this.put('canvas',doc.id,value);return value;
   });}
-  recover(){for(const job of this.list<CanvasTask>('canvas-task'))if(['RUNNING','QUEUED'].includes(job.state)){job.state='PAUSED';job.message='软件曾中断；点击继续，已有版本复用，云端任务按原ID查询';this.put('canvas-task',job.id,job);}}
+  recover(){for(const job of this.list<CanvasTask>('canvas-task'))if(['RUNNING','QUEUED'].includes(job.state)){job.state=job.providerWait?'WAITING_PROVIDER':'PAUSED';job.message=job.providerWait?'软件已恢复，等待按已保存远端ID续查收片':'软件曾中断；点击继续，已有版本复用，云端任务按原ID查询';this.put('canvas-task',job.id,job);}}
   assets(){return this.list<StudioAsset>('asset');}
   checkpoint(){this.db.exec('PRAGMA wal_checkpoint(FULL)');}
   close(){this.db.close();}

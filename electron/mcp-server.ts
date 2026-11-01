@@ -3,14 +3,18 @@ import type {Readable,Writable} from 'node:stream';
 import {randomUUID} from 'node:crypto';
 import {lstat,readFile} from 'node:fs/promises';
 import {extname,isAbsolute} from 'node:path';
-import {newNode,type CanvasNode,type NodeKind} from '../src/desktop/canvas-model';
+import {newNode,NODE_KINDS,type CanvasNode,type NodeKind} from '../src/desktop/canvas-model';
+import {appendContinuation} from '../src/desktop/shot-continuation';
 import {videoApiPrices} from '../src/desktop/pricing-data';
+import {validateFormUnlink} from '../runtime/provider-form-unlink';
 
 type Bridge={origin:string;token:string};
 type BridgeSource=Bridge|(()=>Promise<Bridge>);
 type RpcRequest={jsonrpc?:string;id?:string|number|null;method?:string;params?:any};
 
 const tools=[
+  {name:'append_canvas_continuation',description:'在指定视频节点之后添加实际尾帧提取节点和下一镜头视频节点，并连接到首帧槽。不调用生成 API；下一镜头提示词留空等待作者填写。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},sourceNodeId:{type:'string'}},required:['canvasId','sourceNodeId'],additionalProperties:false}},
+  {name:'extract_video_last_frame',description:'从当前项目已归档的视频提取实际最后一帧，保存图片与来源校验记录。不上传、不调用生成 API、不创建下一镜头任务。',inputSchema:{type:'object',properties:{projectId:{type:'string'},assetId:{type:'string'}},required:['projectId','assetId'],additionalProperties:false}},
   {name:'list_projects',description:'列出本机创作画布项目及各项目画布数量；不返回 API 密钥。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
   {name:'create_project',description:'新建独立的本机创作项目。不会调用生成 API，不消耗额度；同名项目会拒绝。',inputSchema:{type:'object',properties:{name:{type:'string',description:'项目名称，1–80 字符'}},required:['name'],additionalProperties:false}},
   {name:'archive_project',description:'删除指定创作画布项目并保留本机可恢复归档。仅在用户明确要求删除该项目时调用；运行中的项目拒绝删除，不删除共享素材或媒体文件。',inputSchema:{type:'object',properties:{projectId:{type:'string'},projectName:{type:'string',description:'从 list_projects 读取的完整项目名称'},confirmDelete:{type:'boolean',const:true}},required:['projectId','projectName','confirmDelete'],additionalProperties:false}},
@@ -19,18 +23,25 @@ const tools=[
   {name:'clone_canvas_to_project',description:'明确复制一张旧画布到目标项目；为其引用的素材和已生成版本建立独立项目记录，可复用已有本地结果，不会重新提交生成任务或消耗额度。',inputSchema:{type:'object',properties:{sourceCanvasId:{type:'string'},targetProjectId:{type:'string'},name:{type:'string'}},required:['sourceCanvasId','targetProjectId','name'],additionalProperties:false}},
   {name:'list_assets',description:'列出指定项目已归档的文字、图片、视频和音频素材，供画布挂载；不返回密钥或素材正文。',inputSchema:{type:'object',properties:{projectId:{type:'string'}},required:['projectId'],additionalProperties:false}},
   {name:'list_shared_assets',description:'列出已审核且获准复用的总素材库原件；使用前须明确引用到目标项目，不可直接挂画布。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
-  {name:'import_local_asset',description:'把用户明确指定的本机 PNG/JPEG/WebP、MP4、MP3/M4A 文件归档到指定项目。只读取给定文件，不上传至供应商；导入后才能挂载画布。',inputSchema:{type:'object',properties:{projectId:{type:'string'},filePath:{type:'string',description:'用户明确指定的绝对本机文件路径；不可使用 UNC/网络路径'},kind:{type:'string',enum:['image','audio','video']},name:{type:'string'}},required:['projectId','filePath','kind'],additionalProperties:false}},
+  {name:'import_local_asset',description:'把用户明确指定的本机 PNG/JPEG/WebP、MP4、MP3/M4A/WAV 文件归档到指定项目。只读取给定文件，不上传至供应商；导入后才能挂载画布。',inputSchema:{type:'object',properties:{projectId:{type:'string'},filePath:{type:'string',description:'用户明确指定的绝对本机文件路径；不可使用 UNC/网络路径'},kind:{type:'string',enum:['image','audio','video']},name:{type:'string'}},required:['projectId','filePath','kind'],additionalProperties:false}},
   {name:'update_asset_catalog',description:'为项目素材标注集数、场景、镜头、角色、用途、审核和授权依据；仅在用户明确确认审核/复用权时填写 confirmReview/confirmReuse。不会生成视频。',inputSchema:{type:'object',properties:{projectId:{type:'string'},assetId:{type:'string'},catalog:{type:'object',properties:{episodeId:{type:'string'},sceneId:{type:'string'},shotId:{type:'string'},characterId:{type:'string'},purpose:{type:'string'},reviewStatus:{type:'string',enum:['unreviewed','approved','rejected']},reuseAllowed:{type:'boolean'},rightsNote:{type:'string'}},additionalProperties:false},confirmReview:{type:'boolean',description:'将审核状态设为 approved 时，须由用户确认已实际审核'},confirmReuse:{type:'boolean',description:'将复用许可设为 true 时，须由用户确认版权/授权依据'}},required:['projectId','assetId','catalog'],additionalProperties:false}},
   {name:'promote_asset_to_shared',description:'将当前项目经审核且有明确跨项目复用授权的素材固定为总库原件。只有用户明确确认共享和授权依据后调用；不会消耗生成 API。',inputSchema:{type:'object',properties:{projectId:{type:'string'},assetId:{type:'string'},confirmShare:{type:'boolean',const:true}},required:['projectId','assetId','confirmShare'],additionalProperties:false}},
   {name:'reference_shared_asset',description:'将总库已审核素材按固定内容版本引用到指定项目，生成独立项目 assetId；不会调用生成 API。',inputSchema:{type:'object',properties:{sharedAssetId:{type:'string'},targetProjectId:{type:'string'}},required:['sharedAssetId','targetProjectId'],additionalProperties:false}},
   {name:'update_canvas_node',description:'编辑已有画布节点的剧本/提示词、模型、归属镜头与生成参数；只修改允许的字段，不调用生成 API。使用 get_canvas 取得 nodeId。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},nodeId:{type:'string'},fields:{type:'object',properties:{label:{type:'string'},prompt:{type:'string'},model:{type:'string'},resolution:{type:'string'},aspectRatio:{type:'string'},duration:{type:'integer'},size:{type:'string'},seed:{type:'integer'},generateAudio:{type:'boolean'},assetContext:{type:'object',properties:{episodeId:{type:'string'},sceneId:{type:'string'},shotId:{type:'string'},characterId:{type:'string'},characterIds:{type:'array',items:{type:'string'}}},additionalProperties:false}},additionalProperties:false}},required:['canvasId','nodeId','fields'],additionalProperties:false}},
-  {name:'add_canvas_node',description:'给指定画布增加一个文字/图片/视频/输出节点，便于把六节点模板扩展为逐镜头工作流；不调用生成 API。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},kind:{type:'string',enum:['textInput','imageInput','textGenerate','imageGenerate','videoGenerate','output']},fields:{type:'object',properties:{label:{type:'string'},prompt:{type:'string'},model:{type:'string'},resolution:{type:'string'},aspectRatio:{type:'string'},duration:{type:'integer'},size:{type:'string'},seed:{type:'integer'},generateAudio:{type:'boolean'},assetContext:{type:'object',properties:{episodeId:{type:'string'},sceneId:{type:'string'},shotId:{type:'string'},characterId:{type:'string'},characterIds:{type:'array',items:{type:'string'}}},additionalProperties:false}},additionalProperties:false}},required:['canvasId','kind'],additionalProperties:false}},
+  {name:'add_canvas_node',description:'给指定画布增加文字、图片、视频、尾帧提取或输出节点，不调用生成 API。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},kind:{type:'string',enum:[...NODE_KINDS]},fields:{type:'object',properties:{label:{type:'string'},prompt:{type:'string'},model:{type:'string'},resolution:{type:'string'},aspectRatio:{type:'string'},duration:{type:'integer'},size:{type:'string'},seed:{type:'integer'},generateAudio:{type:'boolean'},assetContext:{type:'object',properties:{episodeId:{type:'string'},sceneId:{type:'string'},shotId:{type:'string'},characterId:{type:'string'},characterIds:{type:'array',items:{type:'string'}}},additionalProperties:false}},additionalProperties:false}},required:['canvasId','kind'],additionalProperties:false}},
   {name:'connect_canvas_nodes',description:'在同一画布内连接两个节点；保存前校验槽位、素材类型和循环依赖，不调用生成 API。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},sourceNodeId:{type:'string'},targetNodeId:{type:'string'},slot:{type:'string',enum:['prompt','reference','first_frame','last_frame','input']}},required:['canvasId','sourceNodeId','targetNodeId','slot'],additionalProperties:false}},
   {name:'attach_canvas_asset',description:'将当前项目已归档的图片、音频或视频素材挂到画布生成节点；自动增加素材输入节点及连线，不调用生成 API。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},assetId:{type:'string'},targetNodeId:{type:'string'},slot:{type:'string',enum:['reference','first_frame','last_frame']}},required:['canvasId','assetId','targetNodeId','slot'],additionalProperties:false}},
   {name:'get_public_prices',description:'读取软件内的公开 API 视频价格表。此表不是供应商实时预检，不含未列出的 Wan 等模型。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
   {name:'list_canvases',description:'列出本机 CanvDoAI 画布与最近任务摘要；可限定项目，不返回 API 密钥。',inputSchema:{type:'object',properties:{projectId:{type:'string',description:'可选，仅列出此项目的画布'}},additionalProperties:false}},
   {name:'get_canvas',description:'查看指定画布的节点、连线、提示词和选中版本；不返回 API 密钥。',inputSchema:{type:'object',properties:{canvasId:{type:'string'}},required:['canvasId'],additionalProperties:false}},
   {name:'get_task_status',description:'读取最近画布任务的运行状态、进度和失败原因。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},taskId:{type:'string'}},additionalProperties:false}},
+  {name:'resume_provider_task',description:'只按原 taskId 续查已保存的远端视频ID并归档已有成品；不会上传参考素材、创建生成任务或强制重生成。缺少ID、参数已变化或账户不符时停止。',inputSchema:{type:'object',properties:{taskId:{type:'string'}},required:['taskId'],additionalProperties:false}},
+  {name:'unlink_provider_form',description:'仅在用户明确授权后，清理已审计备份并结束本地跟踪的原任务表单引用。必须给精确sourceJobId及媒体ID/kind/role；不取消官网任务、不删除素材库、不上传或生成、不扣积分。服务端未明确启用或队列不空则拒绝。',inputSchema:{type:'object',properties:{sourceJobId:{type:'string'},expectedRefs:{type:'array',minItems:1,maxItems:20,items:{type:'object',properties:{website_media_id:{type:'string'},kind:{type:'string',enum:['image','video','audio']},role:{type:'string',enum:['reference','first_frame','last_frame']}},required:['website_media_id','kind','role'],additionalProperties:false}},confirmUnlink:{type:'boolean',const:true}},required:['sourceJobId','expectedRefs','confirmUnlink'],additionalProperties:false}},
+  {name:'get_provider_form_unlink',description:'只读查询精确表单清理维护任务的实际回执，不重新清理、不生成。',inputSchema:{type:'object',properties:{maintenanceJobId:{type:'string'}},required:['maintenanceJobId'],additionalProperties:false}},
+  {name:'inspect_provider_submission',description:'明确指定原sourceJobId，由原worker只读核对官网历史卡与原上传凭证。不点击生成、不改附件、不取消、不清锁或改变原任务状态。',inputSchema:{type:'object',properties:{sourceJobId:{type:'string'}},required:['sourceJobId'],additionalProperties:false}},
+  {name:'get_provider_submission_inspection',description:'读取原提交回执的只读核对结果；无匹配继续未知，不生成或自动重试。',inputSchema:{type:'object',properties:{inspectionId:{type:'string'}},required:['inspectionId'],additionalProperties:false}},
+  {name:'prepare_canvas_video_request',description:'只读预检当前视频节点实际待提交的提示词、参数、项目素材映射与能力目录上限；只 GET 能力目录，不上传素材、不创建视频任务、不消耗生成额度。尚未上传的素材不会伪装成供应商已接受。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},nodeId:{type:'string'}},required:['canvasId','nodeId'],additionalProperties:false}},
+  {name:'get_video_route_limits',description:'只读读取当前配置路由的模型能力目录和客户端实际执行的提示词上限；不把能力目录值冒充供应商内部模型已核实上限。',inputSchema:{type:'object',properties:{modelId:{type:'string'}},required:['modelId'],additionalProperties:false}},
   {name:'run_canvas_node',description:'运行画布节点及其必要上游。这会调用已配置的生成 API 并可能产生费用；只有在用户明确要求并确认本次 API 消耗后才能调用。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},nodeId:{type:'string',description:'不填则运行整张画布'},force:{type:'boolean',description:'强制重新生成目标节点，可能再次计费，默认 false'},confirmCost:{type:'boolean',const:true,description:'必须由用户明确确认本次可能产生的 API 费用后设为 true'}},required:['canvasId','confirmCost'],additionalProperties:false}}
 ];
 
@@ -77,7 +88,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
         }
         node.data.assetContext=context;
       }
-      else if(key==='prompt'){if(typeof value!=='string'||value.length>20000||node.data.kind==='imageInput'||node.data.kind==='output')throw Error('该节点不支持此提示词或内容超过 20000 字符');node.data.prompt=value;}
+      else if(key==='prompt'){if(typeof value!=='string'||value.length>20000||['imageInput','output','videoLastFrame'].includes(node.data.kind))throw Error('该节点不支持此提示词或内容超过 20000 字符');node.data.prompt=value;}
       else if(key==='model'){if(typeof value!=='string'||value.length>120||!['textGenerate','imageGenerate','videoGenerate'].includes(node.data.kind))throw Error('该节点不支持模型配置');node.data.model=value;}
       else if(key==='size'){if(typeof value!=='string'||value.length>30||node.data.kind!=='imageGenerate')throw Error('size 仅供图片生成节点使用');node.data.size=value;}
       else if(key==='generateAudio'){if(typeof value!=='boolean'||node.data.kind!=='videoGenerate')throw Error('generateAudio 仅供视频生成节点使用');node.data.generateAudio=value;}
@@ -140,7 +151,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
     if(name==='import_local_asset'){
       const {projectId,filePath,kind}=args||{};
       if(typeof projectId!=='string'||!projectId||typeof filePath!=='string'||!isAbsolute(filePath)||filePath.startsWith('\\\\')||!['image','audio','video'].includes(kind))throw Error('请提供项目、类型及用户明确指定的本机绝对路径；不支持网络路径');
-      const extension=extname(filePath).toLowerCase(),extensions:Record<string,string[]>={image:['.png','.jpg','.jpeg','.webp'],audio:['.mp3','.m4a'],video:['.mp4']};
+      const extension=extname(filePath).toLowerCase(),extensions:Record<string,string[]>={image:['.png','.jpg','.jpeg','.webp'],audio:['.mp3','.m4a','.wav'],video:['.mp4']};
       if(!extensions[kind].includes(extension))throw Error('文件扩展名与素材类型不符');
       const file=await lstat(filePath),limit=kind==='image'?20*1024*1024:kind==='audio'?64*1024*1024:128*1024*1024;
       if(!file.isFile()||file.isSymbolicLink()||!file.size||file.size>limit)throw Error('文件不存在、是链接或超过类型大小限制');
@@ -156,8 +167,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       const saved=await saveCanvas(canvas);return content({canvasId:saved.id,revision:saved.revision,node:{id:node.id,label:node.data.label,kind:node.data.kind}});
     }
     if(name==='add_canvas_node'){
-      const kinds=['textInput','imageInput','textGenerate','imageGenerate','videoGenerate','output'];
-      if(!kinds.includes(args?.kind))throw Error('未知节点类型');
+      if(!NODE_KINDS.includes(args?.kind))throw Error('未知节点类型');
       const {canvas}=await canvasState(args?.canvasId),node=newNode(args.kind as NodeKind,canvas.nodes.length);node.id=randomUUID();
       if(args?.fields)applyFields(node,args.fields);canvas.nodes.push(node);
       const saved=await saveCanvas(canvas);return content({canvasId:saved.id,revision:saved.revision,node:{id:node.id,label:node.data.label,kind:node.data.kind}});
@@ -168,6 +178,17 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       if(!['prompt','reference','first_frame','last_frame','input'].includes(args?.slot))throw Error('未知目标槽位');
       const edge={id:randomUUID(),source:args.sourceNodeId,target:args.targetNodeId,sourceHandle:'result',targetHandle:args.slot};canvas.edges.push(edge);
       const saved=await saveCanvas(canvas);return content({canvasId:saved.id,revision:saved.revision,edge});
+    }
+    if(name==='append_canvas_continuation'){
+      const {canvas,state}=await canvasState(args?.canvasId);
+      const result=appendContinuation(canvas,args?.sourceNodeId,state.assets||[]);
+      const saved=await saveCanvas(result.doc);
+      return content({canvasId:saved.id,revision:saved.revision,frameNodeId:result.frameNodeId,nextNodeId:result.nextNodeId,requestSubmitted:false});
+    }
+    if(name==='extract_video_last_frame'){
+      if(typeof args?.projectId!=='string'||typeof args?.assetId!=='string')throw Error('请指定项目和视频素材');
+      const asset=await api('/api/studio/asset/last-frame',{method:'POST',body:JSON.stringify({assetId:args.assetId,projectId:args.projectId})});
+      return content({asset,requestSubmitted:false});
     }
     if(name==='attach_canvas_asset'){
       const {canvas,state}=await canvasState(args?.canvasId),asset=(state.assets||[]).find((item:any)=>item.id===args?.assetId);
@@ -192,7 +213,33 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       const state=await api('/api/studio/state');let tasks=state.tasks||[];
       if(args?.taskId)tasks=tasks.filter((task:any)=>task.id===args.taskId);
       else if(args?.canvasId)tasks=tasks.filter((task:any)=>task.canvasId===args.canvasId);
-      return content({tasks:tasks.slice(0,50).map((task:any)=>({id:task.id,canvasId:task.canvasId,nodeId:task.nodeId,state:task.state,message:task.message,completed:task.completed,total:task.total,createdAt:task.createdAt,failureStage:task.failureStage}))});
+      return content({tasks:tasks.slice(0,50).map((task:any)=>({id:task.id,canvasId:task.canvasId,nodeId:task.nodeId,state:task.state,message:task.message,completed:task.completed,total:task.total,createdAt:task.createdAt,failureStage:task.failureStage,remoteId:task.providerWait?.remoteId||task.message?.match(/远端任务 ([a-zA-Z0-9_-]+) 仍在运行/)?.[1],canResumeProvider:Boolean(task.providerWait)||/远端任务 .+ 仍在运行；已保存ID/.test(task.message||'')}))});
+    }
+    if(name==='resume_provider_task'){
+      if(typeof args?.taskId!=='string'||!args.taskId||Object.keys(args).some(key=>key!=='taskId'))throw Error('只接受原 taskId；此工具不支持 force 或新生成');
+      const task=await api('/api/studio/provider/resume',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({taskId:args.taskId})});
+      return content({task,note:'仅续查已保存的远端ID并收片；不会新建视频生成。'});
+    }
+    if(name==='unlink_provider_form'){
+      validateFormUnlink(args);
+      return content(await api('/api/studio/provider/form-unlink',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}));
+    }
+    if(name==='inspect_provider_submission'||name==='get_provider_submission_inspection'){
+      const field=name==='inspect_provider_submission'?'sourceJobId':'inspectionId';
+      if(!args||Object.keys(args).length!==1||typeof args[field]!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(args[field]))throw Error('仅接受精确 '+field);
+      return content(await api('/api/studio/provider/receipt-inspection'+(field==='inspectionId'?'?'+new URLSearchParams({inspectionId:args.inspectionId}):''),field==='sourceJobId'?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args)}:{}));
+    }
+    if(name==='get_provider_form_unlink'){
+      if(!args||Object.keys(args).some(key=>key!=='maintenanceJobId')||typeof args.maintenanceJobId!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(args.maintenanceJobId))throw Error('仅接受精确 maintenanceJobId');
+      return content(await api('/api/studio/provider/form-unlink?'+new URLSearchParams({maintenanceJobId:args.maintenanceJobId})));
+    }
+    if(name==='prepare_canvas_video_request'){
+      if(typeof args?.canvasId!=='string'||!args.canvasId||typeof args?.nodeId!=='string'||!args.nodeId)throw Error('canvasId 和 nodeId 均为必填项');
+      return content(await api('/api/studio/video/prepare?'+new URLSearchParams({canvasId:args.canvasId,nodeId:args.nodeId})));
+    }
+    if(name==='get_video_route_limits'){
+      if(typeof args?.modelId!=='string'||!args.modelId)throw Error('modelId 为必填项');
+      return content(await api('/api/studio/video/route-limits?'+new URLSearchParams({modelId:args.modelId})));
     }
     if(name==='run_canvas_node'){
       if(typeof args?.canvasId!=='string'||!args.canvasId)throw Error('canvasId 为必填项');
@@ -211,7 +258,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       try{
         switch(request.method){
           case 'initialize':
-            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.14'}});return;
+            result(id,{protocolVersion:request.params?.protocolVersion||'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'canvdoai-studio',version:'1.1.18'}});return;
           case 'notifications/initialized':
           case 'notifications/cancelled': return;
           case 'ping': result(id,{});return;

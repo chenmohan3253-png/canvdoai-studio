@@ -4,6 +4,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { reviewPage } from '../lib/review-pagination';
 import { AudioReview } from '../../../src/desktop/AudioReview';
+import {RemakeVideoInputs} from './RemakeVideoInputs';
+import {updateDramaVideoInputs,usePreviousDramaTail} from '../lib/drama-client';
 import { loadDispatchHealth, loadDispatchUsage, loadDramaAIHealth, loadSeedanceCatalog, uploadReferenceImage, type DispatchUsage } from "../lib/seedance-client";
 import { DEMO_SEEDANCE_MODEL, seedanceModelsFromCatalog, SNAPSHOT_SEEDANCE_MODELS, type SeedanceCatalogModel } from "../lib/seedance-catalog";
 import { emitDramaForgeEvent, type DramaForgeHostContext } from "../lib/host-bridge";
@@ -489,6 +491,7 @@ export function StagePanels({
                   </div>
                   <details className="source-compare-details"><summary>展开授权原片对照 · {formatDramaTimecode(shot.sourceStartSeconds)}–{formatDramaTimecode(shot.sourceEndSeconds)}</summary><SourceSegmentPlayer src={batch.source_asset.cdn_url} title={shot.title} startSeconds={shot.sourceStartSeconds} endSeconds={shot.sourceEndSeconds} /></details>
                   <details className="prompt-details"><summary>查看分镜与视频生成提示词</summary><pre>{shot.prompt}</pre></details>
+                  {batch.segments.find(segment=>segment.id===shot.id)&&<RemakeVideoInputs segment={batch.segments.find(segment=>segment.id===shot.id)!} previous={batch.segments.find(segment=>segment.position===batch.segments.find(item=>item.id===shot.id)!.position-1)} onPreviousTail={async()=>{const current=batch.segments.find(item=>item.id===shot.id)!,previous=batch.segments.find(item=>item.position===current.position-1);if(!previous?.job_id)throw Error('上一镜尚未成功归档');setProductionBusy(true);try{onBatch(await usePreviousDramaTail(batch.id,shot.id,previous.id,previous.job_id));}finally{setProductionBusy(false);}}} disabled={productionBusy} capabilities={catalogModels.find(model=>model.model===batch.model)?.capabilities??[]} maxAssets={catalogModels.find(model=>model.model===batch.model)?.max_reference_assets??null} onSave={async value=>{setProductionBusy(true);try{onBatch(await updateDramaVideoInputs(batch.id,shot.id,value));}finally{setProductionBusy(false);}}}/>}
                 </div>
               </div>
               <div className="shot-review"><span>{shot.storyboardAsset ? "请作者检查图片内容后给出结论" : "必须先生成真实分镜图"}</span><div>

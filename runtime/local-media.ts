@@ -10,11 +10,11 @@ export function resolveGeneratedFile(directory:string,url:unknown,kind:'asset'|'
   const shared=clean.startsWith(studioPrefix);
   if(!shared&&!clean.startsWith(legacyPrefix))throw Error('INVALID_GENERATED_URL');
   const fileName=clean.slice((shared?studioPrefix:legacyPrefix).length);
-  const namePattern=shared?/^[a-f0-9]{64}\.(png|jpg|webp|mp4|m4a)$/:/^[0-9a-f-]{36}\.[a-z0-9]+$/i;
+  const namePattern=shared?/^[a-f0-9]{64}\.(png|jpg|webp|mp4|m4a|mp3|wav)$/:/^[0-9a-f-]{36}\.[a-z0-9]+$/i;
   const extension=extname(fileName).toLowerCase();
   if(!namePattern.test(fileName)||!extensions.includes(extension)||
     (kind==='asset'&&!['.png','.jpg','.webp'].includes(extension))||
-    (kind==='media'&&shared&&!['.mp4','.m4a'].includes(extension)))throw Error('INVALID_GENERATED_URL');
+    (kind==='media'&&shared&&!['.mp4','.m4a','.mp3','.wav'].includes(extension)))throw Error('INVALID_GENERATED_URL');
   const folder=join(directory,shared?'studio-assets':kind==='asset'?'.local-generated-assets':'.local-generated-media');
   const path=join(folder,fileName);
   const inside=(root:string,target:string)=>{const part=relative(root,target);return part!==''&&!part.startsWith('..')&&!isAbsolute(part);};

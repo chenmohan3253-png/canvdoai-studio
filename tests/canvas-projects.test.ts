@@ -1,5 +1,5 @@
 // @vitest-environment node
-import {afterEach,describe,expect,it} from 'vitest';
+import {afterEach,describe,expect,it,vi} from 'vitest';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -110,11 +110,11 @@ describe('创作画布项目隔离',()=>{
   });
   it('本机素材上传按项目归档并校验格式，音频保持 MP3 类型',async()=>{
     const directory=mkdtempSync(join(tmpdir(),'canvdoai-asset-upload-test-'));directories.push(directory);
-    const engine=new StudioEngine(directory,{},()=>({origin:'http://127.0.0.1:1',token:'not-used'}));stores.push(engine.store);
+    let base='';const engine=new StudioEngine(directory,{},()=>({origin:base,token:'not-used'}));stores.push(engine.store);
     const routes=connect();registerStudioRoutes(routes,engine,{} as any);
     const server=createServer(routes);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
     const address=server.address();if(!address||typeof address==='string')throw Error('HTTP test server unavailable');
-    const base=`http://127.0.0.1:${address.port}`,a=engine.store.createProject('素材甲'),b=engine.store.createProject('素材乙');
+    base=`http://127.0.0.1:${address.port}`;const a=engine.store.createProject('素材甲'),b=engine.store.createProject('素材乙');
     const upload=async(projectId:string,kind:string,name:string,bytes:Buffer)=>fetch(base+`/api/studio/asset/upload?${new URLSearchParams({projectId,kind,name})}`,{method:'POST',body:bytes});
     try{
       const image=await upload(a.id,'image','参考图.png',Buffer.from([137,80,78,71,13,10,26,10,1,2,3]));
@@ -125,6 +125,20 @@ describe('创作画布项目隔离',()=>{
       expect(voice.url).toMatch(/\.mp3$/);
       const media=await fetch(base+voice.url);expect(media.headers.get('content-type')).toBe('audio/mpeg');
       expect((await media.arrayBuffer()).byteLength).toBe(9);
+      const wav=Buffer.alloc(46);wav.write('RIFF');wav.writeUInt32LE(38,4);wav.write('WAVE',8);wav.write('fmt ',12);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(8000,24);wav.writeUInt32LE(16000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(2,40);
+      const waveResponse=await upload(a.id,'audio','测试音频.bin',wav);
+      expect(waveResponse.status).toBe(201);const wave=await waveResponse.json() as StudioAsset;
+      expect(wave.url).toMatch(/\.wav$/);
+      const preview=await fetch(base+wave.url,{headers:{Range:'bytes=0-11'}});
+      expect(preview.status).toBe(206);expect(preview.headers.get('content-type')).toBe('audio/wav');
+      expect(Buffer.from(await preview.arrayBuffer())).toEqual(wav.subarray(0,12));
+      const request=vi.spyOn(engine,'request').mockImplementation(async(_base,_key,path,_body,form)=>{
+        expect(path).toBe('/v1/assets');if(!form||form instanceof FormData)throw Error('Expected native multipart');
+        const parsed=await new Response(form.body,{headers:{'content-type':form.contentType}}).formData();
+        const uploaded=parsed.get('file') as File;expect(uploaded.name).toBe('reference.wav');expect(uploaded.type).toBe('audio/wav');
+        expect(Buffer.from(await uploaded.arrayBuffer())).toEqual(wav);return {object_key:'wave-receipt'};
+      });
+      try{expect(await engine.uploadReference(wave)).toEqual({object_key:'wave-receipt'});expect(request).toHaveBeenCalledOnce();}finally{request.mockRestore();}
       expect((await upload(a.id,'image','伪图片.png',Buffer.from('not-an-image'))).status).toBe(400);
       expect((await upload('missing','image','参考图.png',Buffer.from([137,80,78,71,13,10,26,10]))).status).toBe(400);
       const foreign=canvas(b.id);foreign.nodes[0].data.assetId=asset.id;

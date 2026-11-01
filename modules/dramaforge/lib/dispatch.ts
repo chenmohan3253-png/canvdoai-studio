@@ -1,5 +1,6 @@
 const DEFAULT_BASE_URL = "https://dispatch.example.com";
 import {videoGatewayFetch,fuliuSpec} from '../../../runtime/fuliu-adapter';
+import {isHiggsfieldUnlimitedModel} from './seedance-catalog';
 
 export type DispatchCapability =
   | "text_to_video"
@@ -34,6 +35,7 @@ export interface CreateVideoJobInput {
   callback_url?: string;
   priority?: number;
   allow_fallback?: boolean;
+  use_unlim?: boolean;
 }
 
 export function enforceDramaForgeSeedancePolicy(input: CreateVideoJobInput) {
@@ -55,13 +57,14 @@ export function enforceDramaForgeSeedancePolicy(input: CreateVideoJobInput) {
   if (!input.parameters || typeof input.parameters !== "object") {
     throw new DispatchValidationError("缺少视频生成参数");
   }
-  if (!input.model.toLowerCase().startsWith("seedance") && !(process.env.VIDEO_API_PROTOCOL==='fuliu'&&fuliuSpec(input.model))) {
+  const unlimitedBridge=isHiggsfieldUnlimitedModel(input.model)&&(process.env.VIDEO_API_PROTOCOL||'dispatch')==='dispatch';
+  if (!input.model.toLowerCase().startsWith("seedance") && !unlimitedBridge && !(process.env.VIDEO_API_PROTOCOL==='fuliu'&&fuliuSpec(input.model))) {
     throw new DispatchValidationError("DramaForge 音视频重构只允许使用 Seedance 模型");
   }
   if (input.parameters.generate_audio !== true) {
     throw new DispatchValidationError("DramaForge 必须启用 Seedance 音视频联合生成");
   }
-  if (input.parameters.duration_seconds < 4 || input.parameters.duration_seconds > 15) {
+  if (input.parameters.duration_seconds < (unlimitedBridge?2:4) || input.parameters.duration_seconds > (unlimitedBridge?30:15)) {
     throw new DispatchValidationError("单个 Seedance 镜头时长必须为 4–15 秒");
   }
   if (!["480p", "720p", "1080p", "4k"].includes(input.parameters.resolution)) {
@@ -69,7 +72,7 @@ export function enforceDramaForgeSeedancePolicy(input: CreateVideoJobInput) {
   }
 
   const assets = input.assets || [];
-  if (assets.some((asset) => !asset.object_key || !asset.cdn_url || !asset.sha256 || !asset.mime_type || !asset.kind || !asset.role)) {
+  if (assets.some((asset) => !asset.object_key || (!unlimitedBridge&&!asset.cdn_url) || !asset.sha256 || !asset.mime_type || !asset.kind || !asset.role || unlimitedBridge&&!/^[a-f0-9]{64}$/i.test(asset.sha256))) {
     throw new DispatchValidationError("素材必须包含 object_key、cdn_url、sha256、mime_type、kind 和 role");
   }
   const firstFrames = assets.filter((asset) => asset.role === "first_frame" && asset.kind === "image");
@@ -87,8 +90,12 @@ export function enforceDramaForgeSeedancePolicy(input: CreateVideoJobInput) {
   if (input.capability === "multi_reference" && references.length < 1) {
     throw new DispatchValidationError("多参考任务至少需要 1 个 reference 素材");
   }
-  if (input.parameters.aspect_ratio === "auto" && !["image_to_video", "first_last_frame"].includes(input.capability)) {
+  if (!unlimitedBridge && input.parameters.aspect_ratio === "auto" && !["image_to_video", "first_last_frame"].includes(input.capability)) {
     throw new DispatchValidationError("auto 画幅只允许用于带首帧的帧模式");
+  }
+  if(unlimitedBridge){
+    if(input.allow_fallback===true||input.use_unlim===false)throw new DispatchValidationError('Higgsfield 仅允许无限模式，禁止扣积分后备');
+    return {...input,use_unlim:true,allow_fallback:false};
   }
   return input;
 }

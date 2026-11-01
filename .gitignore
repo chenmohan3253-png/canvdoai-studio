@@ -3,6 +3,7 @@ dist/
 build/
 release*/
 /vendor/ffmpeg/
+/vendor/node-licenses/
 /docs/validation/
 work/
 .local-generated-assets/
@@ -12,6 +13,7 @@ work/
 *.db-*
 *.log
 *.tmp
+.codex-tmp/
 __pycache__/
 *.pyc
 api-settings.encrypted

@@ -119,6 +119,7 @@ export interface DramaStoryboardAssets {
 }
 
 export interface DramaSegment {
+  video_inputs?: import('./drama-video-inputs').DramaVideoInputs;
   id: string;
   batch_id: string;
   position: number;

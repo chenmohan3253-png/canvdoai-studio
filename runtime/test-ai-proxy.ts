@@ -10,8 +10,12 @@ import { normalizeSpeechCues, providerSpeechPrompt, subtitleDisplayText, subtitl
 import { videoTargetSize } from "../src/video-studio/video-specs";
 import {readVideoJobResult,accountFingerprint,failedProviderTasks} from './provider-tasks';
 import {videoGatewayFetch} from './fuliu-adapter';
+import {fetchJijiuContent} from './jijiu-adapter';
 import {fetchResultDownload,ResultDownloadError} from './result-download';
 import {resolveGeneratedFile,concatFileEntry} from './local-media';
+import {videoAssetReceipt} from './video-asset-receipt';
+import {planShotVideoInputs,ShotVideoInputError} from '../src/video-studio/shot-video-inputs';
+import {extractVideoLastFrame} from './video-last-frame';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_BASE_URL = "https://api.example.com/v1";
@@ -399,7 +403,6 @@ async function generateDispatchVideo(options: {
   providerRunId: string;
   projectId: string;
   shot: JsonRecord;
-  imagePath: string;
   width: number;
   height: number;
   aspectRatio: VideoAspectRatio;
@@ -411,8 +414,10 @@ async function generateDispatchVideo(options: {
 }) {
   const session = dispatchSessionCache ?? await loadDispatchSession(options.apiKey);
   dispatchSessionCache = session;
-  const model = session.models.find((item) => item.id === options.modelId && item.capabilities.includes("image_to_video"));
-  if (!model) throw new Error("DISPATCH_MODEL_UNAVAILABLE:所选模型不支持图生视频，请刷新模型目录。");
+  const plan = planShotVideoInputs(options.shot as Parameters<typeof planShotVideoInputs>[0], options.projectId);
+  const model = session.models.find((item) => item.id === options.modelId && item.capabilities.includes(plan.capability));
+  if (!model) throw new Error(`DISPATCH_MODEL_UNAVAILABLE:所选模型不支持 ${plan.capability}，请刷新模型目录或更换模型。`);
+  if (model.maxReferenceAssets !== undefined && plan.inputs.length > model.maxReferenceAssets) throw new ShotVideoInputError('参考素材数量超过所选模型上限');
   const resolution = model.resolutions.includes(options.requestedResolution)
     ? options.requestedResolution
     : model.resolutions.includes("720p") ? "720p" : model.resolutions[0];
@@ -422,36 +427,41 @@ async function generateDispatchVideo(options: {
   if (!resolution || !aspectRatio) throw new Error("DISPATCH_MODEL_UNAVAILABLE:所选模型没有可用的分辨率或画幅。");
   const providerDuration = Math.min(model.durationMax, Math.max(model.durationMin, Math.round(options.durationSec)));
 
-  const uploadSize = videoTargetSize(options.aspectRatio, "720P");
-  const uploadWidth = uploadSize.width;
-  const uploadHeight = uploadSize.height;
-  const uploadFrameName = `${randomUUID()}.jpg`;
-  const uploadFramePath = join(LOCAL_MEDIA_DIR, uploadFrameName);
-  await runExecutable(FFMPEG, [
-    "-y", "-hide_banner", "-loglevel", "error", "-i", options.imagePath,
-    "-vf", `scale=${uploadWidth}:${uploadHeight}:force_original_aspect_ratio=increase,crop=${uploadWidth}:${uploadHeight}`,
-    "-frames:v", "1", "-q:v", "4", uploadFramePath,
-  ], { timeoutMs: 60_000 });
-  const sourceBytes = await readFile(uploadFramePath);
-  const boundary = `----CanvDoAI${randomUUID().replace(/-/g, "")}`;
-  const multipartHead = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="first-frame.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`, "utf8");
-  const multipartTail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
-  const multipartBody = Buffer.concat([multipartHead, sourceBytes, multipartTail]);
-  let assetResponse: Response;
-  try {
-    assetResponse = await dispatchRequest("/v1/assets", options.apiKey, {
-      method: "POST",
-      headers: {
-        "content-type": `multipart/form-data; boundary=${boundary}`,
-        "content-length": String(multipartBody.length),
-      },
-      body: new Uint8Array(multipartBody),
-    }, 120_000);
-  } finally {
-    await unlink(uploadFramePath).catch(() => undefined);
+  const uploadedAssets: Record<string,unknown>[] = [];
+  const inputDigests: {sha256:string;kind:string;role:string;order:number}[] = [];
+  const types: Record<string,string> = {png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',mp4:'video/mp4',webm:'video/webm',mov:'video/quicktime',wav:'audio/wav',mp3:'audio/mpeg',m4a:'audio/mp4',aac:'audio/aac'};
+  for (const item of plan.inputs) {
+    const extensions = item.source.kind === 'image' ? ['.png','.jpg','.jpeg','.webp'] : item.source.kind === 'video' ? ['.mp4','.webm','.mov'] : ['.wav','.mp3','.m4a','.aac'];
+    const group = item.source.kind === 'image' && !item.source.url.startsWith('/api/test-ai/media/') ? 'asset' : 'media';
+    const file = generatedFile(item.source.url, group, extensions);
+    let uploadPath = file.path;
+    let temporary: string | undefined;
+    try {
+      if (!options.shot.videoInputs) {
+        const size = videoTargetSize(options.aspectRatio, '720P');
+        temporary = join(LOCAL_MEDIA_DIR, `${randomUUID()}.jpg`);
+        uploadPath = temporary;
+        await runExecutable(FFMPEG, ['-y','-hide_banner','-loglevel','error','-i',file.path,'-vf',`scale=${size.width}:${size.height}:force_original_aspect_ratio=increase,crop=${size.width}:${size.height}`,'-frames:v','1','-q:v','4',uploadPath], {timeoutMs:60000});
+      }
+      const size = (await stat(uploadPath)).size;
+      if (!size || size > 100 * 1024 * 1024) throw new ShotVideoInputError('参考素材文件必须小于或等于100 MiB');
+      const sourceBytes = await readFile(uploadPath);
+      const digest = createHash('sha256').update(sourceBytes).digest('hex');
+      const extension = uploadPath.split('.').at(-1)!.toLowerCase();
+      const mime = types[extension];
+      if (!mime || !mime.startsWith(item.source.kind + '/')) throw new ShotVideoInputError('参考素材文件类型不匹配');
+      const boundary = `----CanvDoAI${randomUUID().replace(/-/g, '')}`;
+      const head = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="input.${extension}"\r\nContent-Type: ${mime}\r\n\r\n`);
+      const body = Buffer.concat([head,sourceBytes,Buffer.from(`\r\n--${boundary}--\r\n`)]);
+      const response = await dispatchRequest('/v1/assets',options.apiKey,{method:'POST',headers:{'content-type':`multipart/form-data; boundary=${boundary}`,'content-length':String(body.length)},body:new Uint8Array(body)},120000);
+      const receipt = videoAssetReceipt(await response.json(),item.source.kind,item.role,item.order);
+      if (receipt.sha256 !== undefined && String(receipt.sha256).toLowerCase() !== digest) throw new ShotVideoInputError('素材上传校验值与原文件不一致');
+      uploadedAssets.push(receipt);
+      inputDigests.push({sha256:digest,kind:item.source.kind,role:item.role,order:item.order});
+    } finally {
+      if (temporary) await unlink(temporary).catch(()=>undefined);
+    }
   }
-  const asset = await assetResponse.json() as { object_key?: unknown; cdn_url?: unknown; sha256?: unknown; mime_type?: unknown; kind?: unknown };
-  if (typeof asset.cdn_url !== "string") throw new Error("DISPATCH_ASSET_INVALID:视频服务没有返回可用的素材地址。");
 
   const shotId = safeText(options.shot.id, 120);
   const requiredSpeech = speechCuesForShot(options.shot);
@@ -462,7 +472,9 @@ async function generateDispatchVideo(options: {
     reviewSafeRetry ? contentReviewSafeText(imagePrompt) : imagePrompt,
     reviewSafeRetry ? contentReviewSafeText(actionPrompt) : actionPrompt,
     safeText(options.shot.camera, 260),
-    "保持首帧人物身份、五官、发型、服装、场景布局和色彩连续一致。动作自然，镜头稳定，无文字，无字幕，无水印。",
+    plan.capability === 'multi_reference' ? '遵循参考素材中指定的人物形象、场景、动作和声音，保持人物身份和色彩连续一致。动作自然，镜头稳定，无文字，无字幕，无水印。'
+      : plan.capability === 'first_last_frame' ? '保持首帧人物身份、五官、发型、服装、场景布局和色彩连续一致。从指定首帧自然运动到指定尾帧，保持连续镜头。动作自然，镜头稳定，无文字，无字幕，无水印。'
+      : '保持首帧人物身份、五官、发型、服装、场景布局和色彩连续一致。动作自然，镜头稳定，无文字，无字幕，无水印。',
     reviewSafeRetry ? "影视表演式武术演练，双方保持安全距离，只呈现闪避、架势和节奏变化，不呈现伤害结果、接触特写或痛苦表现。" : "",
     options.regenerationInstruction ? `本次局部重做要求：${safeText(options.regenerationInstruction, 800)}` : "",
     options.generateAudio ? providerSpeechPrompt(requiredSpeech) : "",
@@ -470,7 +482,8 @@ async function generateDispatchVideo(options: {
   const stableInputHash = createHash("sha256").update(JSON.stringify({
     projectId: options.projectId,
     shotId,
-    imageSha256: typeof asset.sha256 === "string" ? asset.sha256 : "",
+    ...(!options.shot.videoInputs ? {imageSha256: typeof uploadedAssets[0].sha256 === 'string' ? uploadedAssets[0].sha256 : ''}
+      : {inputDigests,capability:plan.capability}),
     model: model.id,
     prompt,
     duration: providerDuration,
@@ -479,7 +492,7 @@ async function generateDispatchVideo(options: {
     generateAudio: options.generateAudio,
     attempt: options.attempt,
   })).digest("hex").slice(0, 32);
-  const idempotencyKey = `canvdoai-${safeText(options.projectId, 48).replace(/[^a-zA-Z0-9_-]/g, "-")}-${shotId.replace(/[^a-zA-Z0-9_-]/g, "-")}-${stableInputHash}`.slice(0, 240);
+  const idempotencyKey = `canvdoai-${safeText(options.projectId, 48).replace(/[^a-zA-Z0-9_-]/g, "-")}-${shotId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 96)}-${stableInputHash}`;
   const downloaded=await readVideoJobResult({directory:process.env.CANVDOAI_DATA_DIR!,key:idempotencyKey,account:accountFingerprint(DISPATCH_BASE_URL,options.apiKey),create:async()=>{
   const createResponse = await dispatchRequest("/v1/video-jobs", options.apiKey, {
     method: "POST",
@@ -487,7 +500,7 @@ async function generateDispatchVideo(options: {
     body: JSON.stringify({
       idempotency_key: idempotencyKey,
       model: model.id,
-      capability: "image_to_video",
+      capability: plan.capability,
       prompt,
       parameters: {
         duration_seconds: providerDuration,
@@ -495,22 +508,14 @@ async function generateDispatchVideo(options: {
         resolution,
         generate_audio: options.generateAudio,
       },
-      assets: [{
-        url: asset.cdn_url,
-        role: "first_frame",
-        order: 0,
-        ...(typeof asset.object_key === "string" ? { object_key: asset.object_key } : {}),
-        ...(typeof asset.sha256 === "string" ? { sha256: asset.sha256 } : {}),
-        ...(typeof asset.mime_type === "string" ? { mime_type: asset.mime_type } : {}),
-        ...(typeof asset.kind === "string" ? { kind: asset.kind } : {}),
-      }],
+      assets: uploadedAssets,
       allow_fallback: false,
     }),
   }, 60_000);
   return await createResponse.json() as DispatchJob;
   },poll:async(id)=>{const response=await dispatchRequest(`/v1/video-jobs/${encodeURIComponent(id)}`,options.apiKey,{},30000);return await response.json() as DispatchJob;}},async(url)=>{
   if (!/^https?:\/\//i.test(url)) throw new Error("DISPATCH_RESULT_INVALID:任务成功但没有可下载的视频地址。");
-  const resultResponse = videoConfig.videoProtocol==='fuliu'?await fetchResultDownload(url):await fetch(url, { signal: AbortSignal.timeout(180_000) });
+  const resultResponse = videoConfig.videoProtocol==='jijiu'?await fetchJijiuContent(url,DISPATCH_BASE_URL,options.apiKey):videoConfig.videoProtocol==='fuliu'?await fetchResultDownload(url):await fetch(url, { signal: AbortSignal.timeout(180_000) });
   if (!resultResponse.ok) throw new ResultDownloadError(resultResponse.status);
   const declaredLength = Number(resultResponse.headers.get("content-length") ?? 0);
   if (declaredLength > 256 * 1024 * 1024) throw new Error("DISPATCH_RESULT_TOO_LARGE:成片超过 256MB 测试上限。");
@@ -551,6 +556,7 @@ async function generateDispatchVideo(options: {
     jobId,
     modelId: model.id,
     sourceResolution: resolution,
+    inputCapability: plan.capability,
     durationSec: Number(probe.format?.duration ?? options.durationSec),
     width: stream?.width ?? options.width,
     height: stream?.height ?? options.height,
@@ -1412,9 +1418,29 @@ export function registerGenerationRoutes(middlewares: Server) {
             return;
           }
 
+          if (action === 'VIDEO_LAST_FRAME') {
+            const projectId=safeText(input.projectId,160);
+            const clip=input.clip && typeof input.clip==='object' ? input.clip as JsonRecord : {};
+            if (!projectId || typeof clip.id!=='string' || typeof clip.videoUrl!=='string') throw new ShotVideoInputError('请选择当前项目的来源视频版本');
+            const checkpoint=JSON.parse(await readFile(checkpointPath(projectId),'utf8')) as {result?:{clips?:JsonRecord[];videoCandidates?:JsonRecord[]}};
+            const candidates=[...(checkpoint.result?.clips||[]),...(checkpoint.result?.videoCandidates||[])];
+            if (!candidates.some(item=>item.id===clip.id && item.videoUrl===clip.videoUrl)) throw new ShotVideoInputError('来源视频不属于当前项目已保存的版本');
+            const source=generatedFile(clip.videoUrl,'media',['.mp4']);
+            if ((await stat(source.path)).size>512*1024*1024) throw new ShotVideoInputError('来源视频超过尾帧提取大小上限');
+            const digest=async()=>createHash('sha256').update(await readFile(source.path)).digest('hex');
+            const before=await digest();
+            const extracted=await extractVideoLastFrame(source.path);
+            if (before!==await digest()) throw new ShotVideoInputError('提取期间来源视频已变化，请重新选择版本');
+            const id=randomUUID(),name=id+'.png';
+            await mkdir(LOCAL_ASSET_DIR,{recursive:true});
+            await writeFile(join(LOCAL_ASSET_DIR,name),extracted.bytes,{flag:'wx'});
+            respond(response,200,{source:{id,projectId,name:`镜头 ${safeNumber(clip.shotNumber,1,1,999)} v${safeNumber(clip.attempt,1,1,100)} 实际尾帧`,kind:'image',url:'/api/test-ai/assets/'+name,
+              derivation:{sourceClipId:clip.id,sourceSha256:before,frameCount:extracted.frameCount,frameIndex:extracted.frameIndex,algorithm:extracted.algorithm}}});
+            return;
+          }
+
           if (action === "VIDEO_CLIP") {
             const shot = input.shot && typeof input.shot === "object" ? input.shot as JsonRecord : {};
-            const image = generatedFile(shot.imageUrl, "asset", [".png", ".jpg", ".webp"]);
             const shotId = safeText(shot.id, 120);
             const shotNumber = Math.round(safeNumber(shot.shotNumber, 1, 1, 999));
             const durationSec = safeNumber(input.providerDurationSec ?? shot.durationSec, 5, 1, 15);
@@ -1425,7 +1451,6 @@ export function registerGenerationRoutes(middlewares: Server) {
               respond(response, 422, { code: "INVALID_SHOT", message: "镜头 ID 无效。" });
               return;
             }
-            await stat(image.path);
             const providerModel = safeText(input.providerModel, 160);
             if (providerModel) {
               if (!dispatchApiKey) {
@@ -1438,7 +1463,6 @@ export function registerGenerationRoutes(middlewares: Server) {
                 providerRunId: safeText(input.providerRunId, 80) || randomUUID(),
                 projectId: safeText(input.projectId, 120) || "project",
                 shot,
-                imagePath: image.path,
                 width,
                 height,
                 aspectRatio: safeVideoAspectRatio(input.aspectRatio),
@@ -1455,7 +1479,7 @@ export function registerGenerationRoutes(middlewares: Server) {
                   shotNumber,
                   durationSec: generated.durationSec,
                   videoUrl: mediaUrl(generated.fileName),
-                  posterUrl: String(shot.imageUrl),
+                  posterUrl: planShotVideoInputs(shot as Parameters<typeof planShotVideoInputs>[0],safeText(input.projectId,120)||'project').inputs.find(item=>item.source.kind==='image')?.source.url,
                   width: generated.width,
                   height: generated.height,
                   codec: generated.codec,
@@ -1465,11 +1489,15 @@ export function registerGenerationRoutes(middlewares: Server) {
                   providerModel: generated.modelId,
                   providerJobId: generated.jobId,
                   sourceResolution: generated.sourceResolution,
+                  inputCapability: generated.inputCapability,
                   hasEmbeddedAudio: generated.hasEmbeddedAudio,
                 },
               });
               return;
             }
+            if (shot.videoInputs) throw new ShotVideoInputError('首尾帧和参考素材需要选择支持对应能力的视频模型');
+            const image = generatedFile(shot.imageUrl, 'asset', ['.png','.jpg','.webp']);
+            await stat(image.path);
             const fileName = `${randomUUID()}.mp4`;
             const outputPath = join(LOCAL_MEDIA_DIR, fileName);
             const zoomSpeed = Math.min(0.0009, (shotNumber % 2 ? 0.00042 : 0.00034) + attempt * 0.00008);
@@ -1818,9 +1846,10 @@ export function registerGenerationRoutes(middlewares: Server) {
           const requestTooLarge = error instanceof Error && error.message === "REQUEST_TOO_LARGE";
           const unavailable = error instanceof Error && /ENOENT|not recognized|MEDIA_COMMAND_FAILED/.test(error.message);
           const providerFailure = error instanceof Error && (error.message.startsWith("DISPATCH_") || error.message.startsWith("远端生成失败：") || error.message.startsWith("远端任务已失败；"));
-          respond(response, requestTooLarge ? 413 : unavailable ? 503 : providerFailure ? 502 : 500, {
-            code: requestTooLarge ? "REQUEST_TOO_LARGE" : unavailable ? "MEDIA_RUNTIME_UNAVAILABLE" : providerFailure ? "VIDEO_PROVIDER_ERROR" : "POSTPRODUCTION_ERROR",
-            message: requestTooLarge ? "请求内容过大。" : unavailable ? "本机媒体运行环境不可用或媒体命令执行失败。" : providerFailure ? sanitizedProviderText(error.message.replace(/^(?:DISPATCH_[A-Z0-9_]+:?|远端生成失败：)/, ""), "Seedance 视频任务失败，请查看任务状态后重试。") : "后期制作暂时失败，请重试。",
+          const inputFailure = error instanceof ShotVideoInputError;
+          respond(response, requestTooLarge ? 413 : inputFailure ? 422 : unavailable ? 503 : providerFailure ? 502 : 500, {
+            code: requestTooLarge ? "REQUEST_TOO_LARGE" : inputFailure ? 'VIDEO_INPUT_INVALID' : unavailable ? "MEDIA_RUNTIME_UNAVAILABLE" : providerFailure ? "VIDEO_PROVIDER_ERROR" : "POSTPRODUCTION_ERROR",
+            message: requestTooLarge ? "请求内容过大。" : inputFailure ? error.message : unavailable ? "本机媒体运行环境不可用或媒体命令执行失败。" : providerFailure ? sanitizedProviderText(error.message.replace(/^(?:DISPATCH_[A-Z0-9_]+:?|远端生成失败：)/, ""), "Seedance 视频任务失败，请查看任务状态后重试。") : "后期制作暂时失败，请重试。",
           });
         }
       });

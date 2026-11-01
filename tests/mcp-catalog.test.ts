@@ -54,6 +54,12 @@ describe('MCP 总库与项目素材调用',()=>{
       expect(attached.isError).not.toBe(true);expect(attached.data.assetId).toBe(projectAssetId);
       expect((await call('get_canvas',{canvasId})).data.nodes).toHaveLength(2);
       expect((await call('get_task_status',{canvasId})).data.tasks).toHaveLength(0);
+      const continued=await call('append_canvas_continuation',{canvasId,sourceNodeId:targetNodeId});
+      expect(continued.isError).not.toBe(true);expect(continued.data.requestSubmitted).toBe(false);
+      const expanded=(await call('get_canvas',{canvasId})).data;
+      expect(expanded.nodes.find((item:any)=>item.id===continued.data.frameNodeId).kind).toBe('videoLastFrame');
+      expect(expanded.edges.find((item:any)=>item.source===continued.data.frameNodeId).targetHandle).toBe('first_frame');
+      expect((await call('get_task_status',{canvasId})).data.tasks).toHaveLength(0);
     }finally{input.end();await running;await new Promise<void>(resolve=>server.close(()=>resolve()));engine.store.close();}
   });
 });

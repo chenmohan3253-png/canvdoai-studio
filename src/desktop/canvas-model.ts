@@ -1,4 +1,4 @@
-export const NODE_KINDS = ['textInput','imageInput','textGenerate','imageGenerate','videoGenerate','output'] as const;
+export const NODE_KINDS = ['textInput','imageInput','textGenerate','imageGenerate','videoGenerate','videoLastFrame','output'] as const;
 export type NodeKind = typeof NODE_KINDS[number];
 export type MediaKind = 'text'|'image'|'video'|'audio';
 export type InputSlot = 'prompt'|'first_frame'|'last_frame'|'reference'|'input';
@@ -12,7 +12,12 @@ export interface AssetCatalog extends AssetContext {
   sourceAssetId?:string;
   sourceSha256?:string;
 }
-export interface StudioAsset { id:string; name:string; kind:MediaKind; url?:string; text?:string; createdAt:string; origin:AssetOrigin; sha256?:string; libraryScope?:'project'|'shared'; catalog?:AssetCatalog; }
+export interface StudioAsset { id:string; name:string; kind:MediaKind; url?:string; text?:string; createdAt:string; origin:AssetOrigin; sha256?:string; libraryScope?:'project'|'shared'; catalog?:AssetCatalog; derivation?:{type:'video_last_frame';sourceAssetId:string;sourceSha256:string;frameIndex:number;frameCount:number;algorithm:'last-decoded-frame-v1'}; }
+export function studioAssetDownloadName(asset:Pick<StudioAsset,'name'|'kind'|'url'>){
+  let suffix=asset.kind==='image'?'.png':asset.kind==='video'?'.mp4':asset.kind==='audio'?'.m4a':'.txt';
+  try{suffix=new URL(asset.url||'','http://localhost').pathname.match(/\.(png|jpg|webp|mp4|m4a|mp3|wav)$/i)?.[0]||suffix;}catch{/* Use the media-kind default for an invalid URL. */}
+  return asset.name.toLowerCase().endsWith(suffix.toLowerCase())?asset.name:asset.name+suffix;
+}
 export interface CanvasVersion { id:string; assetId:string; fingerprint:string; createdAt:string; }
 export interface CanvasNode {
   id:string; type:'studio'; position:{x:number;y:number}; selected?:boolean;
@@ -21,8 +26,8 @@ export interface CanvasNode {
 export interface CanvasEdge {id:string;source:string;target:string;sourceHandle?:string|null;targetHandle?:string|null;selected?:boolean;}
 export interface CanvasDocument {id:string;name:string;projectId:string;revision:number;nodes:CanvasNode[];edges:CanvasEdge[];viewport?:{x:number;y:number;zoom:number};updatedAt:string;}
 export interface StudioProject {id:string;name:string;createdAt:string;updatedAt:string;legacy?:boolean;}
-export interface CanvasTask {id:string;canvasId:string;nodeId?:string;nodeOrder?:string[];state:'QUEUED'|'RUNNING'|'PAUSED'|'SUCCEEDED'|'FAILED'|'UNKNOWN';message:string;completed:number;total:number;createdAt:string;failureStage?:'VALIDATION'|'REFERENCE_UPLOAD'|'SUBMISSION_OR_PROVIDER';}
-export const NODE_LABELS:Record<NodeKind,string>={textInput:'文本输入',imageInput:'素材输入',textGenerate:'文本生成',imageGenerate:'图片生成 / 编辑',videoGenerate:'视频生成',output:'输出'};
+export interface CanvasTask {id:string;canvasId:string;nodeId?:string;nodeOrder?:string[];state:'QUEUED'|'RUNNING'|'WAITING_PROVIDER'|'PAUSED'|'SUCCEEDED'|'FAILED'|'UNKNOWN';message:string;completed:number;total:number;createdAt:string;failureStage?:'VALIDATION'|'REFERENCE_UPLOAD'|'SUBMISSION_OR_PROVIDER';providerWait?:{nodeId:string;providerKey:string;remoteId:string;fingerprint:string;};}
+export const NODE_LABELS:Record<NodeKind,string>={textInput:'文本输入',imageInput:'素材输入',textGenerate:'文本生成',imageGenerate:'图片生成 / 编辑',videoGenerate:'视频生成',videoLastFrame:'提取视频尾帧',output:'输出'};
 export function newNode(kind:NodeKind,index=0):CanvasNode{return {id:crypto.randomUUID(),type:'studio',position:{x:70+index*70,y:80+index*45},data:{kind,label:NODE_LABELS[kind],prompt:'',duration:5,resolution:'480p',aspectRatio:'9:16',size:'1024x1536',versions:[]}};}
 export function withoutDanglingEdges(doc:CanvasDocument):CanvasDocument {
   const ids=new Set(doc.nodes.map(node=>node.id));
@@ -31,7 +36,7 @@ export function withoutDanglingEdges(doc:CanvasDocument):CanvasDocument {
 }
 export function outputKind(node:CanvasNode,assets:StudioAsset[]):MediaKind|'any'{
   if(node.data.kind==='imageInput')return assets.find(a=>a.id===node.data.assetId)?.kind??'image';
-  return ({textInput:'text',textGenerate:'text',imageGenerate:'image',videoGenerate:'video',output:'any'} as const)[node.data.kind];
+  return ({textInput:'text',textGenerate:'text',imageGenerate:'image',videoGenerate:'video',videoLastFrame:'image',output:'any'} as const)[node.data.kind];
 }
 export function validateGraph(doc:CanvasDocument,assets:StudioAsset[]=[]):string|undefined {
   if(!doc||typeof doc.id!=='string'||!Array.isArray(doc.nodes)||!Array.isArray(doc.edges)||doc.nodes.length>300||doc.edges.length>1500)return '画布格式无效或超过300节点/1500连线';
@@ -45,6 +50,11 @@ export function validateGraph(doc:CanvasDocument,assets:StudioAsset[]=[]):string
     const key=`${e.source}:${e.target}:${slot}`;if(edges.has(key))return '不允许重复连线';edges.add(key);
     if(['textInput','imageInput'].includes(target.data.kind)||source.data.kind==='output')return '输入节点不能接收连线，输出节点不能向外连接';
     const kind=outputKind(source,assets);
+    if(target.data.kind==='videoLastFrame'){
+      if(slot!=='input'||kind!=='video')return '尾帧提取只接收视频输入';
+      if(doc.edges.filter(edge=>edge.target===target.id).length>1)return '尾帧提取只能连接一个视频';
+      continue;
+    }
     if(target.data.kind==='output'){if(slot!=='input')return '输出节点请连接到输入槽';continue;}
     if(slot==='prompt'){if(kind!=='text')return '提示词槽只接收文本';continue;}
     if(!['imageGenerate','videoGenerate'].includes(target.data.kind))return '此节点不支持素材输入';

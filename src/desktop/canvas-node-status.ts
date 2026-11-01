@@ -14,7 +14,7 @@ export function savedNodeStatus(node:CanvasNode):CanvasNodeStatus {
 export function canvasNodeStatuses(doc:CanvasDocument,tasks:CanvasTask[]):Map<string,CanvasNodeStatus>{
   const status=new Map(doc.nodes.map(node=>[node.id,savedNodeStatus(node)]));
   const decided=new Set<string>();
-  const isActive=(task:CanvasTask)=>['QUEUED','RUNNING'].includes(task.state);
+  const isActive=(task:CanvasTask)=>['QUEUED','RUNNING','WAITING_PROVIDER'].includes(task.state);
   const ordered=tasks.filter(t=>t.canvasId===doc.id).slice().sort((a,b)=>
     Number(isActive(b))-Number(isActive(a))||b.createdAt.localeCompare(a.createdAt));
   for(const task of ordered){
@@ -32,7 +32,8 @@ export function canvasNodeStatuses(doc:CanvasDocument,tasks:CanvasTask[]):Map<st
       else if(task.state==='RUNNING'){
         label=index===completed?(generating?'生成中':'处理中'):'等待执行';
         tone=index===completed?'running':'pending';
-      }else if(task.state==='PAUSED'){label='已暂停 · 待恢复';tone='paused';}
+      }else if(task.state==='WAITING_PROVIDER'){label=index===completed?'等待远端 · 自动续查':'等待上游收片';tone=index===completed?'running':'pending';}
+      else if(task.state==='PAUSED'){label='已暂停 · 待恢复';tone='paused';}
       else if(task.state==='UNKNOWN'){
         label=index===completed?'状态待确认':'等待上游恢复';tone='paused';
       }else if(task.state==='FAILED'){

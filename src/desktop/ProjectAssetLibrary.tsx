@@ -1,7 +1,7 @@
 import {useEffect,useState} from 'react';
 import {useNavigate} from 'react-router-dom';
 import {ArrowRight,FileText,Film,Folder,Image,Library,Music,RefreshCw,Search,ShieldCheck} from 'lucide-react';
-import {newNode,type AssetCatalog,type StudioAsset,type CanvasDocument} from './canvas-model';
+import {newNode,studioAssetDownloadName,type AssetCatalog,type StudioAsset,type CanvasDocument} from './canvas-model';
 import {studioApi,downloadStudio,type StudioState} from './studio-client';
 import './canvas.css';
 import './asset-library.css';
@@ -76,7 +76,7 @@ export function AssetLibrary(){
           <div className="asset-card-preview">{asset.kind==='image'&&asset.url?<img src={asset.url} alt={asset.name}/>:asset.kind==='video'&&asset.url?<video controls preload="metadata" src={asset.url}/>:asset.kind==='audio'&&asset.url?<><Music size={34} aria-hidden="true"/><audio controls src={asset.url}/></>:asset.kind==='text'?<p>{asset.text?.slice(0,300)}</p>:<Icon size={36} aria-hidden="true"/>}<span className="asset-type-badge"><Icon size={13} aria-hidden="true"/>{({image:'图片',video:'视频',audio:'音频',text:'文本'} as const)[asset.kind]}</span></div>
           <div className="asset-card-body"><h3>{asset.name}</h3><span className={`asset-review-badge ${asset.catalog?.reviewStatus||'unreviewed'}`}>{asset.catalog?.reviewStatus==='approved'&&<ShieldCheck size={13} aria-hidden="true"/>}{reviewNames[asset.catalog?.reviewStatus||'unreviewed']}</span><small>{[asset.catalog?.episodeId,asset.catalog?.sceneId,asset.catalog?.shotId,asset.catalog?.characterId].filter(Boolean).join(' / ')||'未标记集数、镜头或角色'}</small><small className="asset-id-line">ID {asset.id} · {asset.sha256?`SHA ${asset.sha256.slice(0,10)}`:'无校验值'}</small></div>
           <div className="asset-card-actions"><button onClick={()=>selectAsset(asset)}>查看详情 <ArrowRight size={14} aria-hidden="true"/></button>{asset.libraryScope!=='shared'&&<button onClick={()=>send(asset).catch(e=>setNotice(e.message))}>发送到画布</button>}
-          {asset.url&&<button onClick={()=>downloadStudio(asset.url!,`${asset.name}.${asset.kind==='image'?'png':asset.kind==='video'?'mp4':'m4a'}`).catch(e=>setNotice(e.message))}>下载</button>}</div>
+          {asset.url&&<button onClick={()=>downloadStudio(asset.url!,studioAssetDownloadName(asset)).catch(e=>setNotice(e.message))}>下载</button>}</div>
         </article>;})}</div>
         {!shown.length&&<p className="asset-library-empty">此库暂无匹配素材。{library==='shared'?'从项目库审核并加入总库后才会显示在这里。':'可在项目画布中导入素材，或从总库明确引用。'}</p>}
         {selected&&scoped.some(asset=>asset.id===selected.id)&&<section className="asset-catalog-editor"><h3>{selected.name} · 归档信息</h3><p>选择素材请使用 assetId，不要仅凭文件名。素材内容版本：{selected.sha256||'未记录'}。</p>

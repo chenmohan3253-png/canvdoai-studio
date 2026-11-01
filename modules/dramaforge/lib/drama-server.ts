@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID,createHash } from "node:crypto";
 import { archiveGeneratedVideo } from './desktop-archive';
 import { dispatchFetch, enforceDramaForgeSeedancePolicy, type CreateVideoJobInput } from "./dispatch";
-import { estimateSeedancePoints, SNAPSHOT_SEEDANCE_MODELS } from "./seedance-catalog";
+import { estimateSeedancePoints, SNAPSHOT_SEEDANCE_MODELS,isHiggsfieldUnlimitedModel } from "./seedance-catalog";
 import { createDramaBatchRecord, DramaStoreAccessError, emptyDramaAnalysis, getDramaBatchRecord, listDramaBatchRecords, requestIdentity, saveDramaBatchRecord } from "./drama-store";
 import { DRAMA_LANGUAGES, DRAMA_RIGHTS_STATEMENT_VERSION, DRAMA_TARGETS, formatDramaDuration, isTerminalJobStatus, type DramaBatch, type DramaLanguage, type DramaReviewStatus, type DramaStoryboardAssets, type DramaTargetType } from "./drama-production";
 import type { DispatchAsset, DispatchJob } from "./seedance-client";
@@ -10,6 +10,8 @@ import { ChatGPTConfigurationError, ChatGPTUpstreamError, createDramaCreativeBlu
 import { generateStoryboardImage } from "./storyboard-server";
 import { configuredDramaUploadPolicy } from "./drama-upload-policy";
 import { dramaExportResponse, type DramaExportFormat } from "./drama-export";
+import {dramaVideoCapability,readDramaVideoInputs,saveDramaVideoInputs,validateDramaVideoInputs} from './drama-video-inputs';
+import {extractDramaTailFrame} from './drama-tail-frame';
 
 export class DramaProductionError extends Error {
   constructor(message: string, public status = 400, public category = "validation_error") {
@@ -28,7 +30,7 @@ async function currentSeedanceModels() {
     throw new DramaProductionError("Seedance 实时能力目录暂不可用，已阻止使用过期模型快照创建付费任务", 503, "catalog_unavailable");
   }
   const models = ((result.payload as { models?: SeedanceCatalogModel[] }).models || [])
-    .filter((model) => (model.model.toLowerCase().startsWith("seedance") || (process.env.VIDEO_API_PROTOCOL==='fuliu'&&model.model.startsWith('fuliu-intl-'))) && model.capabilities.includes("multi_reference"));
+    .filter((model) => (model.model.toLowerCase().startsWith("seedance") || isHiggsfieldUnlimitedModel(model.model) || (process.env.VIDEO_API_PROTOCOL==='fuliu'&&model.model.startsWith('fuliu-intl-'))) && model.capabilities.includes("multi_reference"));
   if (!models.length) throw new DramaProductionError("实时能力目录中没有可用的 Seedance 多参考模型", 503, "catalog_unavailable");
   catalogCache = { expiresAt: Date.now() + 5 * 60_000, models };
   return models;
@@ -146,6 +148,7 @@ export async function createProductionBatch(request: Request) {
   if (!model.resolutions.includes(resolution)) throw new DramaProductionError("当前 Seedance 模型不支持所选分辨率");
   const aspectRatio = String(body.aspect_ratio || "9:16") as DramaBatch["aspect_ratio"];
   if (!(["9:16", "16:9", "1:1"] as const).includes(aspectRatio)) throw new DramaProductionError("不支持的成片比例");
+  if(!model.aspect_ratios.includes(aspectRatio))throw new DramaProductionError('当前视频模型尚未开放所选画幅，请选择已验证的画幅或模型');
   const sourceLanguage = String(body.source_language || "zh-CN") as DramaLanguage;
   const targetLanguage = String(body.target_language || "zh-CN") as DramaLanguage;
   if (!DRAMA_LANGUAGES[sourceLanguage] || !DRAMA_LANGUAGES[targetLanguage]) throw new DramaProductionError("不支持的源语言或生产语言");
@@ -192,7 +195,43 @@ export async function createProductionBatch(request: Request) {
 export async function readProductionBatch(request: Request, batchId: string) {
   const batch = await getDramaBatchRecord(requestIdentity(request), batchId);
   if (!batch) throw new DramaProductionError("短剧批次不存在", 404, "not_found");
+  const inputs=await readDramaVideoInputs(batch.id);
+  for(const segment of batch.segments)segment.video_inputs=inputs.get(segment.id);
   return batch;
+}
+
+export async function updateProductionVideoInputs(request:Request,batchId:string,segmentId:string){
+  const identity=requestIdentity(request),batch=await readProductionBatch(request,batchId);
+  const segment=batch.segments.find(item=>item.id===segmentId);
+  if(!segment)throw new DramaProductionError('镜头不属于当前项目',404,'not_found');
+  if(segment.job_id||batch.assembly_job_id)throw new DramaProductionError('已提交的视频版本不可覆盖，请保留该版本并新建制作批次',409,'video_inputs_locked');
+  let input;
+  try{input=validateDramaVideoInputs(await request.json());}catch(error){throw new DramaProductionError(error instanceof Error?error.message:'视频素材无效');}
+  const model=(await currentSeedanceModels()).find(item=>item.model===batch.model);
+  if(!model?.capabilities.includes(dramaVideoCapability(input)))throw new DramaProductionError('当前模型不支持所选素材模式');
+  if(model.max_reference_assets!==null&&model.max_reference_assets!==undefined&&input.assets.length>model.max_reference_assets)throw new DramaProductionError('素材数量超过当前模型上限');
+  segment.video_inputs=await saveDramaVideoInputs(batch.id,segment.id,input);
+  segment.revision+=1;segment.updated_at=new Date().toISOString();batch.updated_at=segment.updated_at;
+  await saveDramaBatchRecord(identity,batch);
+  return batch;
+}
+
+export async function usePreviousProductionTail(request:Request,batchId:string,segmentId:string){
+  const batch=await readProductionBatch(request,batchId),target=batch.segments.find(item=>item.id===segmentId);
+  if(!target)throw new DramaProductionError('目标镜头不属于当前项目',404,'not_found');
+  if(target.job_id||batch.assembly_job_id)throw new DramaProductionError('已提交的版本不能覆盖',409,'video_inputs_locked');
+  if(target.video_inputs?.mode==='references')throw new DramaProductionError('请先建立首尾帧模式的制作版本');
+  const body=await request.json() as {source_segment_id?:string;source_job_id?:string};
+  const previous=batch.segments.find(item=>item.position===target.position-1);
+  if(!previous||previous.id!==body.source_segment_id||previous.job_id!==body.source_job_id||!previous.job_id||previous.job_status!=='succeeded'||!previous.result_url)throw new DramaProductionError('请选择本项目上一镜已成功归档的明确版本');
+  const model=(await currentSeedanceModels()).find(item=>item.model===batch.model);
+  const tail=target.video_inputs?.assets.find(asset=>asset.role==='last_frame');
+  if(!model?.capabilities.includes(tail?'first_last_frame':'image_to_video'))throw new DramaProductionError('当前 API 不支持目标首尾帧能力，未上传或生成');
+  const first=await extractDramaTailFrame(previous.job_id);
+  const input=validateDramaVideoInputs({mode:'frames',assets:[first,...(tail?[{...tail,order:1}]:[])]});
+  target.video_inputs=await saveDramaVideoInputs(batch.id,target.id,input);
+  target.revision+=1;target.updated_at=new Date().toISOString();batch.updated_at=target.updated_at;
+  return saveDramaBatchRecord(requestIdentity(request),batch);
 }
 
 export async function listProductionBatches(request: Request) {
@@ -202,6 +241,7 @@ export async function listProductionBatches(request: Request) {
   const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(50, Math.floor(requestedLimit))) : 10;
   const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
   const data = await listDramaBatchRecords(requestIdentity(request), limit, offset);
+  for(const batch of data){const inputs=await readDramaVideoInputs(batch.id);for(const segment of batch.segments)segment.video_inputs=inputs.get(segment.id);}
   return { data, nextOffset: data.length === limit ? offset + limit : null };
 }
 
@@ -529,10 +569,21 @@ function subtitleCuesForBatch(batch: DramaBatch) {
   });
 }
 
-function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"][number], sourceAsset: DispatchAsset): CreateVideoJobInput {
+export function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"][number], sourceAsset?: DispatchAsset): CreateVideoJobInput {
   if (!segment.storyboard_asset || segment.storyboard_asset.kind !== "image" || segment.storyboard_review_status !== "approved") {
     throw new DramaProductionError("必须先生成并通过当前片段的分镜图审查");
   }
+  if(segment.video_inputs){
+    const inputs=validateDramaVideoInputs(segment.video_inputs);
+    const digest=createHash('sha256').update(JSON.stringify({team:batch.team_id,batch:batch.id,segment:segment.id,revision:segment.revision,model:batch.model,prompt:segment.prompt,seconds:segment.duration_seconds,ratio:batch.aspect_ratio,resolution:batch.resolution,capability:dramaVideoCapability(inputs),assets:inputs.assets.map(a=>({key:a.object_key,sha256:a.sha256,kind:a.kind,role:a.role,order:a.order}))})).digest('hex').slice(0,48);
+    return enforceDramaForgeSeedancePolicy({
+      idempotency_key:'dramaforge-media-'+digest,
+      model:batch.model,capability:dramaVideoCapability(inputs),prompt:['硬性出图规则：画面内不得生成字幕、标题、文字、UI、水印或平台标识；对白只进入音轨，底部字幕由拼接服务统一生成。',segment.prompt].join('\n').slice(0,5000),
+      parameters:{duration_seconds:segment.duration_seconds,aspect_ratio:batch.aspect_ratio,resolution:batch.resolution,generate_audio:true},
+      assets:inputs.assets.map(asset=>({object_key:asset.object_key,cdn_url:asset.cdn_url,sha256:asset.sha256,mime_type:asset.mime_type,kind:asset.kind,role:asset.role,order:asset.order})),allow_fallback:false,
+    });
+  }
+  if(!sourceAsset)throw new DramaProductionError('缺少已准备的源片段');
   const approvedReferences = batch.reference_assets.filter((asset) => asset.review_status === "approved").slice(0, 10);
   return enforceDramaForgeSeedancePolicy({
     idempotency_key: `dramaforge-${batch.team_id}-${batch.id}-${segment.id}-r${segment.revision}`.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 120),
@@ -578,9 +629,9 @@ function createJobInput(batch: DramaBatch, segment: DramaBatch["segments"][numbe
 }
 
 async function submitSegment(batch: DramaBatch, segment: DramaBatch["segments"][number]) {
-  let sourceAsset: DispatchAsset;
+  let sourceAsset: DispatchAsset|undefined;
   try {
-    sourceAsset = await prepareSegmentSourceAsset(batch, segment);
+    if(!segment.video_inputs)sourceAsset = await prepareSegmentSourceAsset(batch, segment);
   } catch (error) {
     segment.job_status = "failed";
     segment.failure = {
@@ -620,6 +671,12 @@ export async function generateProductionBatch(request: Request, batchId: string)
   }
   const model = (await currentSeedanceModels()).find((item) => item.model === batch.model);
   if (!model) throw new DramaProductionError("当前 Seedance 模型已不可用，请重新建立批次");
+  for(const segment of batch.segments){
+    if(!segment.video_inputs)continue;
+    const input=validateDramaVideoInputs(segment.video_inputs);
+    if(!model.capabilities.includes(dramaVideoCapability(input))||!model.resolutions.includes(batch.resolution)||!model.aspect_ratios.includes(batch.aspect_ratio)||segment.duration_seconds<model.duration_min||segment.duration_seconds>model.duration_max)throw new DramaProductionError('当前模型能力或参数已变化，已在提交前阻止生成');
+    if(model.max_reference_assets!==null&&input.assets.length>model.max_reference_assets)throw new DramaProductionError('参考数量超过模型上限');
+  }
   const currentQuote = estimateSeedancePoints(model, batch.segments.reduce((sum, segment) => sum + segment.duration_seconds, 0), batch.resolution, batch.aspect_ratio) || 0;
   if (currentQuote !== batch.estimated_points) {
     batch.estimated_points = currentQuote;
