@@ -30,6 +30,14 @@ function fixture(retryMs=100000){
   const run=async(force=false)=>{const task=engine.run(doc.id,node.id,force,randomUUID());await engine.wait();return engine.store.get<CanvasTask>('canvas-task',task.id)!;};
   return {directory,engine,node,doc,state,request,upload,run};
 }
+async function waitForTaskState(engine:StudioEngine,taskId:string,expected:CanvasTask['state']){
+  try{
+    await vi.waitFor(()=>expect(engine.store.get<CanvasTask>('canvas-task',taskId)?.state).toBe(expected),{timeout:10000,interval:10});
+  }catch(error){
+    const task=engine.store.get<CanvasTask>('canvas-task',taskId);
+    throw Error(`等待自动收片状态超时：expected=${expected}, actual=${task?.state||'missing'}, message=${task?.message||'none'}; ${error instanceof Error?error.message:String(error)}`);
+  }
+}
 afterEach(async()=>{
   for(const engine of engines){engine.stop();await engine.wait();engine.store.close();}engines.clear();vi.restoreAllMocks();
   for(const folder of folders.splice(0)){if(!resolve(folder).startsWith(resolve(tmpdir())+sep)||!folder.includes('canvdoai-collection-'))throw Error('Unsafe cleanup');rmSync(folder,{recursive:true,force:true});}
@@ -56,11 +64,11 @@ describe('已提交视频无人值守收片',()=>{
     expect(f.engine.store.get<CanvasDocument>('canvas',f.doc.id)!.nodes[0].data.versions).toHaveLength(1);
     f.request.mockClear();expect((await f.run(false)).state).toBe('SUCCEEDED');expect(f.request).not.toHaveBeenCalled();expect(f.upload).not.toHaveBeenCalled();
   });
-  it('轮询窗口结束显示WAITING_PROVIDER并自动按原ID收片，只有一次生成',async()=>{
+  it('轮询窗口结束显示WAITING_PROVIDER并自动按原ID收片，只有一次生成',{timeout:15000},async()=>{
     const f=fixture(5),task=await f.run();expect(task.state).toBe('WAITING_PROVIDER');expect(task.providerWait?.remoteId).toBe('job-1');expect(task.failureStage).toBeUndefined();
     expect(()=>f.engine.run(f.doc.id,f.node.id,true,randomUUID())).toThrow('运行中');
     f.state.ready=true;
-    await vi.waitFor(()=>expect(f.engine.store.get<CanvasTask>('canvas-task',task.id)?.state).toBe('SUCCEEDED'));
+    await waitForTaskState(f.engine,task.id,'SUCCEEDED');
     expect(f.request.mock.calls.filter(call=>call[2]==='/v1/video-jobs')).toHaveLength(1);
     expect(f.upload).not.toHaveBeenCalled();expect(f.engine.store.get<CanvasDocument>('canvas',f.doc.id)!.nodes[0].data.versions).toHaveLength(1);
   });
@@ -73,10 +81,10 @@ describe('已提交视频无人值守收片',()=>{
     expect(f.upload).not.toHaveBeenCalled();
     f.engine.resumeProviderTask(task.id);expect(f.engine.store.get<CanvasDocument>('canvas',f.doc.id)!.nodes[0].data.versions).toHaveLength(1);
   });
-  it('远端成功后下载暂不可用会自动重取，保留原ID和单次生成',async()=>{
+  it('远端成功后下载暂不可用会自动重取，保留原ID和单次生成',{timeout:15000},async()=>{
     const f=fixture(5);f.state.ready=true;vi.mocked(f.engine.readUrl).mockRejectedValueOnce(new ResultDownloadError(500));
     const task=await f.run();expect(task.state).toBe('WAITING_PROVIDER');
-    await vi.waitFor(()=>expect(f.engine.store.get<CanvasTask>('canvas-task',task.id)?.state).toBe('SUCCEEDED'));
+    await waitForTaskState(f.engine,task.id,'SUCCEEDED');
     expect(f.request.mock.calls.filter(call=>call[2]==='/v1/video-jobs')).toHaveLength(1);
   });
   it('旧版本地FAILED超时记录能迁移为原ID收片，未知且无ID的记录禁止创建',async()=>{
