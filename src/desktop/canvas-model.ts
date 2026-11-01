@@ -26,7 +26,13 @@ export interface CanvasNode {
 export interface CanvasEdge {id:string;source:string;target:string;sourceHandle?:string|null;targetHandle?:string|null;selected?:boolean;}
 export interface CanvasDocument {id:string;name:string;projectId:string;revision:number;nodes:CanvasNode[];edges:CanvasEdge[];viewport?:{x:number;y:number;zoom:number};updatedAt:string;}
 export interface StudioProject {id:string;name:string;createdAt:string;updatedAt:string;legacy?:boolean;}
-export interface CanvasTask {id:string;canvasId:string;nodeId?:string;nodeOrder?:string[];state:'QUEUED'|'RUNNING'|'WAITING_PROVIDER'|'PAUSED'|'SUCCEEDED'|'FAILED'|'UNKNOWN';message:string;completed:number;total:number;createdAt:string;failureStage?:'VALIDATION'|'REFERENCE_UPLOAD'|'SUBMISSION_OR_PROVIDER';providerWait?:{nodeId:string;providerKey:string;remoteId:string;fingerprint:string;};}
+export interface CanvasTaskStatusContext {
+  source:'saved_task_record';observedAt:string;querySubmittedGeneration:false;
+  providerCorrection?:{state:'REJECTED';basis:'EXACT_MIGRATION_TASK_ID';correctedAt:string;originalAttemptAt:string;httpStatus:422};
+  newerAttempt?:{id:string;createdAt:string;state:CanvasTask['state']};
+  guidance:string;
+}
+export interface CanvasTask {id:string;canvasId:string;nodeId?:string;nodeOrder?:string[];state:'QUEUED'|'RUNNING'|'WAITING_PROVIDER'|'PAUSED'|'SUCCEEDED'|'FAILED'|'UNKNOWN';message:string;completed:number;total:number;createdAt:string;failureStage?:'VALIDATION'|'REFERENCE_UPLOAD'|'SUBMISSION_OR_PROVIDER';providerWait?:{nodeId:string;providerKey:string;remoteId:string;fingerprint:string;};statusContext?:CanvasTaskStatusContext;}
 export const NODE_LABELS:Record<NodeKind,string>={textInput:'文本输入',imageInput:'素材输入',textGenerate:'文本生成',imageGenerate:'图片生成 / 编辑',videoGenerate:'视频生成',videoLastFrame:'提取视频尾帧',output:'输出'};
 export function newNode(kind:NodeKind,index=0):CanvasNode{return {id:crypto.randomUUID(),type:'studio',position:{x:70+index*70,y:80+index*45},data:{kind,label:NODE_LABELS[kind],prompt:'',duration:5,resolution:'480p',aspectRatio:'9:16',size:'1024x1536',versions:[]}};}
 export function withoutDanglingEdges(doc:CanvasDocument):CanvasDocument {

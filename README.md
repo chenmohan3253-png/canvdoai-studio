@@ -6,11 +6,11 @@ CanvDoAI Studio 是一个 Windows 桌面端 AI 视频创作工作室，提供创
 
 ## Windows 桌面集成测试版下载
 
-- [下载 CanvDoAI Studio 1.1.19 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.19/CanvDoAI-Studio-1.1.19-Setup.exe)
-- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.19/CanvDoAI-Studio-1.1.19-Setup-SHA256.txt)
-- [查看 1.1.19 发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.19)
+- [下载 CanvDoAI Studio 1.1.20 安装包](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.20/CanvDoAI-Studio-1.1.20-Setup.exe)
+- [下载 SHA-256 校验文件](https://github.com/chenmohan3253-png/canvdoai-studio/releases/download/v1.1.20/CanvDoAI-Studio-1.1.20-Setup-SHA256.txt)
+- [查看 1.1.20 发布说明](https://github.com/chenmohan3253-png/canvdoai-studio/releases/tag/v1.1.20)
 
-1.1.19 定位为 Windows 10/11 x64 **桌面集成测试版**。发布工作流生成的安装包内置 FFmpeg/FFprobe 和本机 MCP 所需运行时，不需要另外安装 Node.js、Python 或本地大模型。当前安装包尚未进行企业代码签名，Windows SmartScreen 可能显示“未知发布者”；请确认下载来源为本仓库并核对同一 Release 页面提供的 SHA-256。软件安装后可直接打开，但 AI 生成需要在“API 接口设置”中填写有效接口和密钥。全量真实供应商、干净 Windows 安装/升级与跨机器验收尚未完成，不应把测试版理解为所有 API 和全部工作流均已生产验收。
+1.1.20 定位为 Windows 10/11 x64 **桌面集成测试版**。发布工作流生成的安装包内置 FFmpeg/FFprobe 和本机 MCP 所需运行时，不需要另外安装 Node.js、Python 或本地大模型。当前安装包尚未进行企业代码签名，Windows SmartScreen 可能显示“未知发布者”；请确认下载来源为本仓库并核对同一 Release 页面提供的 SHA-256。软件安装后可直接打开，但 AI 生成需要在“API 接口设置”中填写有效接口和密钥。全量真实供应商、干净 Windows 安装/升级与跨机器验收尚未完成，不应把测试版理解为所有 API 和全部工作流均已生产验收。
 
 ## 功能
 
@@ -95,6 +95,8 @@ npm start
 - [1.1.16 更新说明](docs/CanvDoAI-Studio-1.1.16-更新说明.md)：修复云端 FFmpeg 下载地址并重新发布安装包
 - [1.1.17 更新说明](docs/CanvDoAI-Studio-1.1.17-更新说明.md)：视频请求只读预检、路由能力上限与提示词规则调整
 - [1.1.19 更新说明](docs/CanvDoAI-Studio-1.1.19-更新说明.md)：按接口和模型配置提示词上限、完整保留视频提示词、明确拒绝状态及素材格式修复
+- [1.1.20 更新说明](docs/CanvDoAI-Studio-1.1.20-更新说明.md)：区分只读预检与实际提交、历史错误与新任务
+- [MCP 视频生成与状态判断](docs/MCP-视频生成与状态判断.md)：项目接续、素材上传时机、真实回执与防重复生成
 - [MCP 调用说明](docs/CanvDoAI-MCP-调用说明.md)：在其他 Codex 项目中连接本机软件、30 项工具的用途和安全边界
 - [分层素材库与 MCP 归档](docs/素材库分层与MCP归档.md)：总库、项目库、镜头标签及跨项目显式引用
 - [跨任务 MCP 使用说明](docs/CanvDoAI-跨任务使用说明-1.1.14.md)：可复制到另一项 Codex 任务的安全操作指令
@@ -105,7 +107,7 @@ npm start
 
 ## 视频重制需要下载什么插件
 
-- **直接安装 1.1.19 桌面集成测试版的用户：不需要另外下载媒体插件。** 发布安装包应已经内置 FFmpeg/FFprobe，负责媒体探测、拆镜、抽帧、转码、音轨处理、字幕和合成。
+- **直接安装 1.1.20 桌面集成测试版的用户：不需要另外下载媒体插件。** 发布安装包应已经内置 FFmpeg/FFprobe，负责媒体探测、拆镜、抽帧、转码、音轨处理、字幕和合成。
 - **从 GitHub 源码构建的开发者：需要自行准备 FFmpeg/FFprobe。** 从 [FFmpeg 官方下载页](https://ffmpeg.org/download.html)选择符合自身分发许可要求的 Windows 构建，把 `ffmpeg.exe`、`ffprobe.exe` 及许可证材料放入 `vendor/ffmpeg/`。
 - **视觉分析不是本地插件。** 原片人物、场景、动作和构图分析需要在软件“API 接口设置”中配置支持图片输入的 OpenAI-compatible 视觉接口。
 - **PySceneDetect 是可选服务器增强项，不是当前客户端必装项。** 若工作室要在分析服务器提高复杂转场检测效果，可评估 [PySceneDetect](https://github.com/Breakthrough/PySceneDetect)；接入前仍需要实现服务器适配器，不能仅安装后就认为客户端已经调用。

@@ -34,13 +34,13 @@ const tools=[
   {name:'get_public_prices',description:'读取软件内的公开 API 视频价格表。此表不是供应商实时预检，不含未列出的 Wan 等模型。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
   {name:'list_canvases',description:'列出本机 CanvDoAI 画布与最近任务摘要；可限定项目，不返回 API 密钥。',inputSchema:{type:'object',properties:{projectId:{type:'string',description:'可选，仅列出此项目的画布'}},additionalProperties:false}},
   {name:'get_canvas',description:'查看指定画布的节点、连线、提示词和选中版本；不返回 API 密钥。',inputSchema:{type:'object',properties:{canvasId:{type:'string'}},required:['canvasId'],additionalProperties:false}},
-  {name:'get_task_status',description:'读取最近画布任务的运行状态、进度和失败原因。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},taskId:{type:'string'}},additionalProperties:false}},
+  {name:'get_task_status',description:'只读读取保存的画布任务状态、创建时间与失败原文；精确迁移证据可更正历史供应商状态。历史错误不代表本轮新提交，请优先查询 newerAttempt。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},taskId:{type:'string'}},additionalProperties:false}},
   {name:'resume_provider_task',description:'只按原 taskId 续查已保存的远端视频ID并归档已有成品；不会上传参考素材、创建生成任务或强制重生成。缺少ID、参数已变化或账户不符时停止。',inputSchema:{type:'object',properties:{taskId:{type:'string'}},required:['taskId'],additionalProperties:false}},
   {name:'unlink_provider_form',description:'仅在用户明确授权后，清理已审计备份并结束本地跟踪的原任务表单引用。必须给精确sourceJobId及媒体ID/kind/role；不取消官网任务、不删除素材库、不上传或生成、不扣积分。服务端未明确启用或队列不空则拒绝。',inputSchema:{type:'object',properties:{sourceJobId:{type:'string'},expectedRefs:{type:'array',minItems:1,maxItems:20,items:{type:'object',properties:{website_media_id:{type:'string'},kind:{type:'string',enum:['image','video','audio']},role:{type:'string',enum:['reference','first_frame','last_frame']}},required:['website_media_id','kind','role'],additionalProperties:false}},confirmUnlink:{type:'boolean',const:true}},required:['sourceJobId','expectedRefs','confirmUnlink'],additionalProperties:false}},
   {name:'get_provider_form_unlink',description:'只读查询精确表单清理维护任务的实际回执，不重新清理、不生成。',inputSchema:{type:'object',properties:{maintenanceJobId:{type:'string'}},required:['maintenanceJobId'],additionalProperties:false}},
   {name:'inspect_provider_submission',description:'明确指定原sourceJobId，由原worker只读核对官网历史卡与原上传凭证。不点击生成、不改附件、不取消、不清锁或改变原任务状态。',inputSchema:{type:'object',properties:{sourceJobId:{type:'string'}},required:['sourceJobId'],additionalProperties:false}},
   {name:'get_provider_submission_inspection',description:'读取原提交回执的只读核对结果；无匹配继续未知，不生成或自动重试。',inputSchema:{type:'object',properties:{inspectionId:{type:'string'}},required:['inspectionId'],additionalProperties:false}},
-  {name:'prepare_canvas_video_request',description:'只读预检当前视频节点实际待提交的提示词、参数、项目素材映射与能力目录上限；只 GET 能力目录，不上传素材、不创建视频任务、不消耗生成额度。尚未上传的素材不会伪装成供应商已接受。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},nodeId:{type:'string'}},required:['canvasId','nodeId'],additionalProperties:false}},
+  {name:'prepare_canvas_video_request',description:'只读预检当前视频节点实际待提交的提示词、参数、项目素材映射与能力目录上限；只 GET 能力目录，不上传素材、不创建视频任务、不消耗生成额度。预检通过但附件未上传是正常状态；用户授权后调用 run_canvas_node 才会上传附件并实际提交。不要为等待 providerAccepted 而反复只读预检；providerAccepted 仍只表示供应商实际接受情况。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},nodeId:{type:'string'}},required:['canvasId','nodeId'],additionalProperties:false}},
   {name:'get_video_route_limits',description:'只读读取当前配置路由的模型能力目录和客户端实际执行的提示词上限；不把能力目录值冒充供应商内部模型已核实上限。',inputSchema:{type:'object',properties:{modelId:{type:'string'}},required:['modelId'],additionalProperties:false}},
   {name:'run_canvas_node',description:'运行画布节点及其必要上游。这会调用已配置的生成 API 并可能产生费用；只有在用户明确要求并确认本次 API 消耗后才能调用。',inputSchema:{type:'object',properties:{canvasId:{type:'string'},nodeId:{type:'string',description:'不填则运行整张画布'},force:{type:'boolean',description:'强制重新生成目标节点，可能再次计费，默认 false'},confirmCost:{type:'boolean',const:true,description:'必须由用户明确确认本次可能产生的 API 费用后设为 true'}},required:['canvasId','confirmCost'],additionalProperties:false}}
 ];
@@ -202,7 +202,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
     }
     if(name==='list_canvases'){
       const state=await api('/api/studio/state'+(args?.projectId?'?projectId='+encodeURIComponent(args.projectId):''));
-      return content({canvases:(state.canvases||[]).map((canvas:any)=>({id:canvas.id,name:canvas.name,projectId:canvas.projectId,revision:canvas.revision,updatedAt:canvas.updatedAt,nodes:(canvas.nodes||[]).map((node:any)=>({id:node.id,label:node.data?.label,kind:node.data?.kind,model:node.data?.model||undefined,hasPrompt:!!node.data?.prompt,selectedVersion:node.data?.selectedVersion||undefined}))})),recentTasks:(state.tasks||[]).slice(0,30).map((task:any)=>({id:task.id,canvasId:task.canvasId,state:task.state,message:task.message,completed:task.completed,total:task.total,createdAt:task.createdAt}))});
+      return content({canvases:(state.canvases||[]).map((canvas:any)=>({id:canvas.id,name:canvas.name,projectId:canvas.projectId,revision:canvas.revision,updatedAt:canvas.updatedAt,nodes:(canvas.nodes||[]).map((node:any)=>({id:node.id,label:node.data?.label,kind:node.data?.kind,model:node.data?.model||undefined,hasPrompt:!!node.data?.prompt,selectedVersion:node.data?.selectedVersion||undefined}))})),recentTasks:(state.tasks||[]).slice(0,30).map((task:any)=>({id:task.id,canvasId:task.canvasId,state:task.state,message:task.message,completed:task.completed,total:task.total,createdAt:task.createdAt,statusContext:task.statusContext}))});
     }
     if(name==='get_canvas'){
       if(typeof args?.canvasId!=='string'||!args.canvasId)throw Error('canvasId 为必填项');
@@ -213,7 +213,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       const state=await api('/api/studio/state');let tasks=state.tasks||[];
       if(args?.taskId)tasks=tasks.filter((task:any)=>task.id===args.taskId);
       else if(args?.canvasId)tasks=tasks.filter((task:any)=>task.canvasId===args.canvasId);
-      return content({tasks:tasks.slice(0,50).map((task:any)=>({id:task.id,canvasId:task.canvasId,nodeId:task.nodeId,state:task.state,message:task.message,completed:task.completed,total:task.total,createdAt:task.createdAt,failureStage:task.failureStage,remoteId:task.providerWait?.remoteId||task.message?.match(/远端任务 ([a-zA-Z0-9_-]+) 仍在运行/)?.[1],canResumeProvider:Boolean(task.providerWait)||/远端任务 .+ 仍在运行；已保存ID/.test(task.message||'')}))});
+      return content({notice:'这是保存的任务记录；createdAt 是原任务创建时间，本次查询不提交生成。历史失败不代表本轮新失败。',tasks:tasks.slice(0,50).map((task:any)=>({id:task.id,canvasId:task.canvasId,nodeId:task.nodeId,state:task.state,message:task.message,completed:task.completed,total:task.total,createdAt:task.createdAt,failureStage:task.failureStage,statusContext:task.statusContext,remoteId:task.providerWait?.remoteId||task.message?.match(/远端任务 ([a-zA-Z0-9_-]+) 仍在运行/)?.[1],canResumeProvider:Boolean(task.providerWait)||/远端任务 .+ 仍在运行；已保存ID/.test(task.message||'')}))});
     }
     if(name==='resume_provider_task'){
       if(typeof args?.taskId!=='string'||!args.taskId||Object.keys(args).some(key=>key!=='taskId'))throw Error('只接受原 taskId；此工具不支持 force 或新生成');
@@ -245,7 +245,7 @@ export async function runMcpStdio(bridgeSource:BridgeSource,trace:(event:string)
       if(typeof args?.canvasId!=='string'||!args.canvasId)throw Error('canvasId 为必填项');
       if(args?.confirmCost!==true)throw Error('尚未确认费用；请先取得用户对可能产生 API 消耗的明确确认，再调用此工具。');
       const task=await api('/api/studio/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({canvasId:args.canvasId,nodeId:args.nodeId,force:args.force===true,requestId:randomUUID(),confirmCost:true})});
-      return content({accepted:true,task:{id:task.id,canvasId:task.canvasId,nodeId:task.nodeId,state:task.state,message:task.message,completed:task.completed,total:task.total},note:'任务已提交；使用 get_task_status 查询进度。'});
+      return content({accepted:true,acceptanceScope:'LOCAL_RUN_REQUEST',providerAcceptance:'NOT_CHECKED',task:{id:task.id,canvasId:task.canvasId,nodeId:task.nodeId,state:task.state,message:task.message,completed:task.completed,total:task.total},note:'本地运行请求已受理；素材上传和供应商提交异步进行。请使用 get_task_status 查看真实远端回执，不能仅凭本地 accepted=true 宣称供应商已接单或成片已生成。'});
     }
     throw Error(`未知工具：${name}`);
   };

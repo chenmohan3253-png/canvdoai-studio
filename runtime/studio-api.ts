@@ -5,6 +5,7 @@ import {pipeline} from 'node:stream/promises';
 import {randomUUID} from 'node:crypto';
 import type {DurableStore} from '../electron/store';
 import {StudioEngine} from './studio-engine';
+import {projectTaskStatuses,type ProviderTaskStatusRecord} from './task-status-projection';
 import {syncModuleAssets,applyCanvasAsset} from './studio-bridge';
 import {exportCanvas,importCanvas} from './studio-package';
 import {validateGraph,type CanvasDocument,type CanvasTask,type StudioAsset} from '../src/desktop/canvas-model';
@@ -23,7 +24,8 @@ export function registerStudioRoutes(routes:Server,engine:StudioEngine,legacy:Du
       if(req.method==='GET'&&path==='/api/studio/state'){
         const projectId=url.searchParams.get('projectId'),canvases=engine.store.list<CanvasDocument>('canvas').filter(c=>!projectId||c.projectId===projectId);
         const ids=new Set(canvases.map(c=>c.id));
-        json({projects:engine.store.projects(),archivedProjects:engine.store.archivedProjects(),canvases,assets:engine.store.assets().filter(a=>!projectId||(a.libraryScope!=='shared'&&a.origin.projectId===projectId)),tasks:engine.store.list<CanvasTask>('canvas-task').filter(t=>!projectId||ids.has(t.canvasId)).slice(0,200)});return;
+        const tasks=projectTaskStatuses(engine.store.list<CanvasTask>('canvas-task'),engine.store.list<ProviderTaskStatusRecord>('provider-task'));
+        json({projects:engine.store.projects(),archivedProjects:engine.store.archivedProjects(),canvases,assets:engine.store.assets().filter(a=>!projectId||(a.libraryScope!=='shared'&&a.origin.projectId===projectId)),tasks:tasks.filter(t=>!projectId||ids.has(t.canvasId)).slice(0,200)});return;
       }
       if(req.method==='GET'&&path==='/api/studio/video/prepare'){
         json(await engine.prepareVideoRequest(url.searchParams.get('canvasId')||'',url.searchParams.get('nodeId')||''));return;
